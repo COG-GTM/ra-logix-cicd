@@ -36,6 +36,14 @@ namespace UnitTesting_ConsoleApp
         public static readonly int numberOfGeneratedBAKFilesToRetain = 0;     /* File management input. 
                                                                                  (Recommended to delete all backup files due to GitHub integration). */
 
+        // Process exit codes read by the Jenkins test gate. Only EXIT_PASS allows the CI pipeline to open a release pull request.
+        public const int EXIT_PASS = 0;   // Every test case ran and passed.
+        public const int EXIT_FAIL = 1;   // A test case failed, the controller faulted, or the workbook had no test cases.
+        public const int EXIT_ERROR = 2;  // No valid test ran (bad arguments, missing workbook, unsupported test object type, or an exception).
+
+        // The text report written by this run. Named after the Jenkins build number and input workbook so the pipeline reads this exact file.
+        public static string textFileReportPath = "";
+
         /// <summary>
         /// This unit test example has the following steps.<br/>
         /// 1. The "input excel sheet" is parsed. This excel sheet contains the following information:<br/>
@@ -66,8 +74,10 @@ namespace UnitTesting_ConsoleApp
         /// args[7] = The number of the Jenkins job being run (example format: 218).<br/>
         /// args[8] = The folder path to which generated files will be saved during testing (example format: C:\CI-Pipeline-Files\).
         /// </param>
-        /// <returns>A Task that unit tests a specific Studio 5000 Logix Designer component specified within the input excel sheet.</returns>
-        static async Task Main(string[] args)
+        /// <returns>
+        /// The process exit code: EXIT_PASS (0) if every test case passed, EXIT_FAIL (1) if any test failed, EXIT_ERROR (2) if no valid test ran.
+        /// </returns>
+        static async Task<int> Main(string[] args)
         {
             // Incorrect number of parameters console output.
             if (args.Length != 9)
@@ -80,6 +90,7 @@ namespace UnitTesting_ConsoleApp
                                   @"excel_filename.xlsx 'Allen Bradley' example@gmail.com 'Most recent commit message insert here' " +
                                   @"287bb2c93a2d1c99143d233fd3ed70cdb997f149 Jenkins-CICD-Example 218 C:\CI-Pipeline-Files\", 20, consoleCharLengthLimit));
                 CreateBanner("END");
+                return EXIT_ERROR;
             }
 
             // Parse incoming arguments.
@@ -93,13 +104,13 @@ namespace UnitTesting_ConsoleApp
             string jenkinsBuildNumber = args[7];                   // 8th incoming argument = the Jenkins job build number
             string reportAndGeneratedFilesFolderPath = args[8];    // 9th incoming argument = the folder path to the folder storing generated test files
             string inputExcelFilePath = githubPath + @"2-cicd-config\1-ci-teststage\3-ci-inputexcelworkbooks\" + inputExcelFileName;
-            string textFileReportPath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_UnitTestReport.txt";
+            textFileReportPath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + GetTextReportFileName(jenkinsBuildNumber, inputExcelFileName);
 
             // Print out error message if input excel workbook does not exist and end script.
             if (!File.Exists(inputExcelFilePath))
             {
                 ConsoleMessage($"Specified input excel workbook named '{inputExcelFileName}' does not exist at '{inputExcelFilePath}'.", "ERROR");
-                return;
+                return EXIT_ERROR;
             }
 
             // Create the local folders that will contain the test reports and generated file contents.
@@ -115,53 +126,84 @@ namespace UnitTesting_ConsoleApp
             // Create new test report file (.txt) using the Console printout.
             StartLogging(textFileReportPath);
 
-            // Print unit test banner to the console.
-            Console.WriteLine("\n  ".PadRight(consoleCharLengthLimit - 2, '='));
-            Console.WriteLine("".PadRight(consoleCharLengthLimit, '='));
-            string bannerContents = "CI UNIT TESTING STAGE | " + DateTime.Now + " " + TimeZoneInfo.Local;
-            int padding = (consoleCharLengthLimit - bannerContents.Length) / 2;
-            Console.WriteLine(bannerContents.PadLeft(bannerContents.Length + padding).PadRight(consoleCharLengthLimit));
-            Console.WriteLine("".PadRight(consoleCharLengthLimit, '='));
-            Console.WriteLine("  ".PadRight(consoleCharLengthLimit - 2, '=') + "\n\n");
-
-            // Print information to the console.
-            CreateBanner("GITHUB & JENKINS INFO");
-            Console.WriteLine("Test initiated by: ".PadRight(40, ' ') + name_mostRecentCommit);
-            Console.WriteLine("Tester contact information: ".PadRight(40, ' ') + email_mostRecentCommit);
-            Console.WriteLine("Git commit hash to be verified: ".PadRight(40, ' ') + hash_mostRecentCommit);
-            Console.WriteLine("Git commit message to be verified: ".PadRight(40, ' ') + WrapText(message_mostRecentCommit, 40, 85));
-            Console.WriteLine("Jenkins job being executed: ".PadRight(40, ' ') + jenkinsJobName);
-            Console.WriteLine("Jenkins job build number: ".PadRight(40, ' ') + jenkinsBuildNumber);
-            CreateBanner(".NET INFO");
-            Console.WriteLine("LDSDK .NET Core version: ".PadRight(40, ' ') + "8.0");
-            Console.WriteLine("EchoSDK .NET Core version: ".PadRight(40, ' ') + "6.0");
-
-            // This variable will be populated from the input excel file and contains the type of target object to be unit tested. 
-            string iExcel_testObjectType;
-
-            // Parse excel sheet for test object type.
-            using (ExcelPackage package = new ExcelPackage(new FileInfo(inputExcelFilePath)))
+            try
             {
-                ExcelWorksheet inputExcelWorksheet = package.Workbook.Worksheets.FirstOrDefault()!;
-                iExcel_testObjectType = inputExcelWorksheet.Cells[9, 2].Value.ToString()!.Trim()!.ToUpper()!;
-            }
+                // Print unit test banner to the console.
+                Console.WriteLine("\n  ".PadRight(consoleCharLengthLimit - 2, '='));
+                Console.WriteLine("".PadRight(consoleCharLengthLimit, '='));
+                string bannerContents = "CI UNIT TESTING STAGE | " + DateTime.Now + " " + TimeZoneInfo.Local;
+                int padding = (consoleCharLengthLimit - bannerContents.Length) / 2;
+                Console.WriteLine(bannerContents.PadLeft(bannerContents.Length + padding).PadRight(consoleCharLengthLimit));
+                Console.WriteLine("".PadRight(consoleCharLengthLimit, '='));
+                Console.WriteLine("  ".PadRight(consoleCharLengthLimit - 2, '=') + "\n\n");
 
-            // Run the test script for the specific input target object.
-            if (iExcel_testObjectType == "APPLICATION.L5X")
-                await UnitTestScript_FullApp.RunTest(args);
-            else if (iExcel_testObjectType == "AOI_DEFINITION.L5X")
-                await UnitTestScript_AOI.RunTest(args);
-            else if (iExcel_testObjectType == "RUNG.L5X")
-                ConsoleMessage("Rung unit test has yet to be developed.", "ERROR");
-            else if (iExcel_testObjectType == "ROUTINE.L5X")
-                ConsoleMessage("Routine unit test has yet to be developed.", "ERROR");
-            else if (iExcel_testObjectType == "PROGRAM.L5X")
-                ConsoleMessage("Program unit test has yet to be developed.", "ERROR");
-            else
-            {
-                ConsoleMessage($"Test object type '{iExcel_testObjectType}' not supported. Select either AOI_Definition.L5X, Rung.L5X, Routine.L5X, " +
-                    $"Program.L5X, or Application.L5X.", "ERROR");
+                // Print information to the console.
+                CreateBanner("GITHUB & JENKINS INFO");
+                Console.WriteLine("Test initiated by: ".PadRight(40, ' ') + name_mostRecentCommit);
+                Console.WriteLine("Tester contact information: ".PadRight(40, ' ') + email_mostRecentCommit);
+                Console.WriteLine("Git commit hash to be verified: ".PadRight(40, ' ') + hash_mostRecentCommit);
+                Console.WriteLine("Git commit message to be verified: ".PadRight(40, ' ') + WrapText(message_mostRecentCommit, 40, 85));
+                Console.WriteLine("Jenkins job being executed: ".PadRight(40, ' ') + jenkinsJobName);
+                Console.WriteLine("Jenkins job build number: ".PadRight(40, ' ') + jenkinsBuildNumber);
+                CreateBanner(".NET INFO");
+                Console.WriteLine("LDSDK .NET Core version: ".PadRight(40, ' ') + "8.0");
+                Console.WriteLine("EchoSDK .NET Core version: ".PadRight(40, ' ') + "6.0");
+
+                // This variable will be populated from the input excel file and contains the type of target object to be unit tested. 
+                string iExcel_testObjectType;
+
+                // Parse excel sheet for test object type.
+                using (ExcelPackage package = new ExcelPackage(new FileInfo(inputExcelFilePath)))
+                {
+                    ExcelWorksheet inputExcelWorksheet = package.Workbook.Worksheets.FirstOrDefault()!;
+                    iExcel_testObjectType = inputExcelWorksheet.Cells[9, 2].Value.ToString()!.Trim()!.ToUpper()!;
+                }
+
+                // Run the test script for the specific input target object.
+                bool testPassed;
+                if (iExcel_testObjectType == "APPLICATION.L5X")
+                    testPassed = await UnitTestScript_FullApp.RunTest(args);
+                else if (iExcel_testObjectType == "AOI_DEFINITION.L5X")
+                    testPassed = await UnitTestScript_AOI.RunTest(args);
+                else
+                {
+                    if (iExcel_testObjectType == "RUNG.L5X")
+                        ConsoleMessage("Rung unit test has yet to be developed.", "ERROR");
+                    else if (iExcel_testObjectType == "ROUTINE.L5X")
+                        ConsoleMessage("Routine unit test has yet to be developed.", "ERROR");
+                    else if (iExcel_testObjectType == "PROGRAM.L5X")
+                        ConsoleMessage("Program unit test has yet to be developed.", "ERROR");
+                    else
+                        ConsoleMessage($"Test object type '{iExcel_testObjectType}' not supported. Select either AOI_Definition.L5X, Rung.L5X, Routine.L5X, " +
+                            $"Program.L5X, or Application.L5X.", "ERROR");
+
+                    CreateBanner("UNIT TEST FINAL RESULT: FAIL");
+                    return EXIT_ERROR;
+                }
+
+                return testPassed ? EXIT_PASS : EXIT_FAIL;
             }
+            catch (Exception e)
+            {
+                ConsoleMessage($"Unit test aborted before completion: {e.GetType().Name}: {e.Message}", "ERROR");
+                CreateBanner("UNIT TEST FINAL RESULT: FAIL");
+                return EXIT_ERROR;
+            }
+            finally
+            {
+                StopLogging();
+            }
+        }
+
+        /// <summary>
+        /// Get the text report file name for a test run. The Jenkins pipeline derives the same name to read the result of this exact run.
+        /// </summary>
+        /// <param name="jenkinsBuildNumber">The Jenkins build number.</param>
+        /// <param name="inputExcelFileName">The name of the input excel workbook.</param>
+        /// <returns>The file name in the format 'Build{jenkinsBuildNumber}_{workbook name without extension}_UnitTestReport.txt'.</returns>
+        public static string GetTextReportFileName(string jenkinsBuildNumber, string inputExcelFileName)
+        {
+            return $"Build{jenkinsBuildNumber}_{Path.GetFileNameWithoutExtension(inputExcelFileName)}_UnitTestReport.txt";
         }
     }
 }

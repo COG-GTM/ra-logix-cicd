@@ -21,7 +21,7 @@ pipeline {
         PATH_GEN_FILES_AND_REPORTS = "C:\\CI-Pipeline-Files\\"
         GITHUB_DEV_BRANCH = 'develop/datatype-bounds'
         GITHUB_RELEASE_BRANCH = 'release/v1.0.0'
-        FINAL_TEST_RESULT = "PASS"
+        FINAL_TEST_RESULT = "FAIL" // Fail closed: only set to PASS once every workbook has been tested and passed in this build.
         GITHUB_USER_EMAIL = powershell(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
         GITHUB_USER_NAME = powershell(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
         GITHUB_COMMIT_HASH = powershell(script: "git log -1 --pretty=format:'%H'", returnStdout: true).trim()
@@ -40,24 +40,52 @@ pipeline {
                     def executable_filePath = "${env.PATH_JENKINS_GITHUB}2-cicd-config\\1-ci-teststage\\2-ci-unittestscript\\UnitTesting_ConsoleApp\\bin\\" +
                         "Release\\net8.0\\UnitTesting_ConsoleApp.exe"
 
+                    def textReportsFolderPath = "${env.PATH_GEN_FILES_AND_REPORTS}1-textreports"
+
                     // Get all file names in the specified folder
-                    def excelFileNames = powershell(
-                        script: "Get-ChildItem -Path ${inputExcelWorkbooksFolderPath} -Filter *.xlsx | Select-Object -ExpandProperty Name",
+                    def excelFileNamesOutput = powershell(
+                        script: "Get-ChildItem -LiteralPath '${inputExcelWorkbooksFolderPath}' -Filter *.xlsx | Select-Object -ExpandProperty Name",
                         returnStdout: true
-                    ).trim().split('\n')
-
-                    // Loop through each excel workbook file name and execute the test script for each workbook. 
-                    excelFileNames.each { fileName ->
-                        bat(script: "@${executable_filePath} ${env.PATH_JENKINS_GITHUB} ${fileName.trim()} \"${env.GITHUB_USER_NAME}\" ${env.GITHUB_USER_EMAIL} " +
-                            "\"${env.GITHUB_COMMIT_MSG}\" ${env.GITHUB_COMMIT_HASH} ${env.JOB_NAME} ${env.BUILD_NUMBER} ${env.PATH_GEN_FILES_AND_REPORTS}")
-
-                        // Get the phrase "PASS" or "FAIL" from the final banner displayed in the text report.
-                        testFinalResult = trimFinalTextReportBanner("${env.PATH_GEN_FILES_AND_REPORTS}1-textreports")
-
-                        // Assign the test results value directly to FINAL_TEST_RESULT environment variable.
-                        if (testFinalResult == "FAIL") {
-                            FINAL_TEST_RESULT = testFinalResult
+                    ).trim()
+                    def excelFileNames = []
+                    for (name in excelFileNamesOutput.split('\n')) {
+                        if (name.trim()) {
+                            excelFileNames.add(name.trim())
                         }
+                    }
+
+                    // Loop through each excel workbook file name and execute the test script for each workbook. A workbook only passes when the test
+                    // program exits with code 0 AND the report written by this build for this workbook ends with the PASS banner.
+                    def passedWorkbooks = 0
+                    for (fileName in excelFileNames) {
+                        def reportFilePath = "${textReportsFolderPath}\\${textReportFileName(env.BUILD_NUMBER, fileName)}"
+
+                        // Remove any report left from an earlier run of this build number so it cannot be mistaken for this run's result.
+                        bat(script: "@if exist \"${reportFilePath}\" del /f /q \"${reportFilePath}\"")
+
+                        def exitCode = bat(returnStatus: true, script: "@\"${executable_filePath}\" ${env.PATH_JENKINS_GITHUB} \"${fileName}\" " +
+                            "\"${env.GITHUB_USER_NAME}\" ${env.GITHUB_USER_EMAIL} \"${env.GITHUB_COMMIT_MSG}\" ${env.GITHUB_COMMIT_HASH} ${env.JOB_NAME} " +
+                            "${env.BUILD_NUMBER} ${env.PATH_GEN_FILES_AND_REPORTS}")
+
+                        // Get the phrase "PASS" or "FAIL" from the final banner displayed in this run's text report.
+                        def reportResult = readFinalTextReportBanner(reportFilePath)
+
+                        if (exitCode == 0 && reportResult == 'PASS') {
+                            passedWorkbooks++
+                        } else {
+                            echo "Workbook '${fileName}' did not pass testing (test program exit code: ${exitCode}, text report result: ${reportResult})."
+                        }
+                    }
+
+                    // Assign the test results value directly to FINAL_TEST_RESULT environment variable.
+                    if (excelFileNames.size() > 0 && passedWorkbooks == excelFileNames.size()) {
+                        FINAL_TEST_RESULT = 'PASS'
+                    } else {
+                        FINAL_TEST_RESULT = 'FAIL'
+                        if (excelFileNames.size() == 0) {
+                            echo "No input excel workbooks found at '${inputExcelWorkbooksFolderPath}'. No tests ran."
+                        }
+                        currentBuild.result = 'FAILURE'
                     }
                 }
             }
@@ -68,9 +96,9 @@ pipeline {
             steps {
                 createBanner('STAGE: Release')
                 script {
-                    echo "Creating new branch for ${FINAL_TEST_RESULT}ED contents and opening pull request into ${env.GITHUB_RELEASE_BRANCH}."
-
                     if (FINAL_TEST_RESULT == 'PASS') {
+                        echo "Creating new branch for ${FINAL_TEST_RESULT}ED contents and opening pull request into ${env.GITHUB_RELEASE_BRANCH}."
+
                         // Create the contents of the pr body message based on the results of testing.
                         def pr_messagecontents = "${env.GITHUB_USER_NAME} contributions from commit hash ${env.GIT_COMMIT} PASSED testing. Merge release/pending-" +
                             "pr-${env.BUILD_NUMBER} into ${env.GITHUB_RELEASE_BRANCH}. The release/pending-pr-${env.BUILD_NUMBER} branch can be safely deleted" + 
@@ -113,7 +141,7 @@ pipeline {
                                             '--head ' + "release/pending-pr-${env.BUILD_NUMBER}" 
                             bat prCommand
                     }
-                    if (FINAL_TEST_RESULT == 'FAIL') {
+                    else {
                         echo "CI Testing FAILURE: ${env.GITHUB_USER_NAME} contributions from commit hash ${env.GIT_COMMIT} did not pass CI testing. Check the " +
                             "${PATH_GEN_FILES_AND_REPORTS} folder for the generated test reports. ${env.GITHUB_USER_NAME} needs to return to Studio 5000 Logix " +
                             "Designer, correct their changes, and make another commit to the ${env.GITHUB_DEV_BRANCH} branch."
@@ -141,24 +169,33 @@ def createBanner(bannerName) {
     }
 }
 
-// Function to get just the final result, PASS or FAIL, of a generated text file report.
-def trimFinalTextReportBanner(folderPath) {
-    def fileList = bat(script: "dir /b /o:-d ${folderPath}", returnStdout: true).trim().split('\r\n')
-    if (fileList.size() > 0) {
-        def mostRecentFilePath = "${folderPath}\\${fileList[1]}"
+// Function to get the text report file name for a workbook. Must match StartUnitTest.GetTextReportFileName in UnitTestProgram.cs.
+def textReportFileName(buildNumber, excelFileName) {
+    def workbookName = excelFileName.toLowerCase().endsWith('.xlsx') ? excelFileName.substring(0, excelFileName.length() - 5) : excelFileName
+    return "Build${buildNumber}_${workbookName}_UnitTestReport.txt"
+}
 
-        // Get file contents
-        def fileContents = readFile(mostRecentFilePath).trim()
-
-        // Get the last 9 characters of the string
-        def lastNineChars = fileContents[-9..-1]
-        
-        // Remove the ']', '=', and '-' characters
-        def result = lastNineChars.replaceAll("[\\]=-]", "")
-        
-        return result
-    } else {
-        echo "No text files found in the folder: ${folderPath}"
-        return "ERROR: no file found."
+// Function to get just the final result, PASS or FAIL, of a generated text file report. Any other outcome (missing report, empty report, or a
+// report that does not end with the final result banner) is returned as a non-PASS value.
+def readFinalTextReportBanner(reportFilePath) {
+    if (!fileExists(reportFilePath)) {
+        echo "Text report not found: ${reportFilePath}"
+        return 'MISSING'
     }
+
+    def lines = readFile(reportFilePath).trim().readLines()
+    if (lines.isEmpty()) {
+        echo "Text report is empty: ${reportFilePath}"
+        return 'EMPTY'
+    }
+
+    def lastLine = lines[-1].trim()
+    if (lastLine ==~ /-*=\[UNIT TEST FINAL RESULT: PASS\]=-+/) {
+        return 'PASS'
+    }
+    if (lastLine ==~ /-*=\[UNIT TEST FINAL RESULT: FAIL\]=-+/) {
+        return 'FAIL'
+    }
+    echo "Text report does not end with a final result banner: ${reportFilePath}"
+    return 'UNKNOWN'
 }
