@@ -29,6 +29,7 @@ namespace CD_Deployment
                                                                                                          (Useful during troubleshooting.) */
         public static readonly bool deleteEchoChassis = true; /* ------------------------------------- Choose whether to keep or delete emulated chassis (including 
                                                                                                          its controllers) at the end of testing. */
+        private const string EchoCommPathPrefix = @"EmulateEthernet\"; /* --------------------------- Communication path prefix of Logix Echo emulated controllers. */
         public static readonly DateTime testStartTime = DateTime.Now; /* ----------------------------- The time during which this test was first initiated. 
                                                                                                          (Used at end of test to calculate unit test length.) */
         public static readonly string currentDateTime = testStartTime.ToString("yyyyMMddHHmmss"); /* - Time during which test was first initiated.
@@ -161,7 +162,9 @@ namespace CD_Deployment
                     acdFilePath = generatedACD;
 
                 // If one of the input file paths specified are for an emulated controller, create that Echo controller if it did not previously exist.
-                if (plcCommPath.StartsWith(@"EmulateEthernet\"))
+                bool isEmulated = plcCommPath.StartsWith(EchoCommPathPrefix, StringComparison.OrdinalIgnoreCase);
+                bool chassisCreated = false;
+                if (isEmulated)
                 {
 
                     if (i == 0)
@@ -169,43 +172,52 @@ namespace CD_Deployment
                     else
                         ConsoleMessage($"START creating emulated controller for '{plcCommPath}' in chassis 'GeneratedChassis-{i + 1}'.", "NEWSECTION");
 
-                    string justIP = plcCommPath.Replace(@"EmulateEthernet\", "");
+                    string justIP = plcCommPath.Substring(EchoCommPathPrefix.Length);
                     await LogixEchoMethods.CreateChassisFromACD_Async(acdFilePath, justIP, $"GeneratedChassis-{i + 1}");
+                    chassisCreated = true;
                     ConsoleMessage($"Done creating emulated controller for '{plcCommPath}' in chassis 'GeneratedChassis-{i + 1}'.", "STATUS");
                     ConsoleMessage($"Note that in a typical CI/CD system, the input excel workbook would not contain any emulated controller communication " +
                         $"paths that need to be emulated. Emulated file paths are included only for demo purposes.", "STATUS");
                 }
 
-                // Open instance of the LogixProject class.
-                if ((i == 0) && (!plcCommPath.StartsWith(@"EmulateEthernet\")))
-                    ConsoleMessage($"START opening ACD file '{acdFilePath}' for '{plcCommPath}'.", "NEWSECTION", false);
-                else
-                    ConsoleMessage($"START opening ACD file '{acdFilePath}' for '{plcCommPath}'.", "NEWSECTION");
+                try
+                {
+                    // Open instance of the LogixProject class.
+                    if ((i == 0) && !isEmulated)
+                        ConsoleMessage($"START opening ACD file '{acdFilePath}' for '{plcCommPath}'.", "NEWSECTION", false);
+                    else
+                        ConsoleMessage($"START opening ACD file '{acdFilePath}' for '{plcCommPath}'.", "NEWSECTION");
 
-                LogixProject logixProject = await OpenLogixProjectAsync(acdFilePath);
+                    LogixProject logixProject = await OpenLogixProjectAsync(acdFilePath);
 
-                // Capture and print event logger information to the console. (Useful during troubleshooting.)
-                if (showFullEventLog)
-                    logixProject.AddEventHandler(new StdOutEventLogger());
+                    // Capture and print event logger information to the console. (Useful during troubleshooting.)
+                    if (showFullEventLog)
+                        logixProject.AddEventHandler(new StdOutEventLogger());
 
-                // Change controller mode to program & verify.
-                ConsoleMessage($"START changing controller '{plcCommPath}' to PROGRAM mode...", "NEWSECTION");
-                await ChangeControllerMode_Async(plcCommPath, "PROGRAM", logixProject);
-                if (await ReadControllerMode_Async(plcCommPath, logixProject) != "PROGRAM")
-                    throw new DeploymentAbortedException($"FAILURE changing controller '{plcCommPath}' to PROGRAM mode. Download not attempted.");
-                ConsoleMessage($"SUCCESS changing controller '{plcCommPath}' to PROGRAM mode.", "STATUS", false);
+                    // Change controller mode to program & verify.
+                    ConsoleMessage($"START changing controller '{plcCommPath}' to PROGRAM mode...", "NEWSECTION");
+                    await ChangeControllerMode_Async(plcCommPath, "PROGRAM", logixProject);
+                    if (await ReadControllerMode_Async(plcCommPath, logixProject) != "PROGRAM")
+                        throw new DeploymentAbortedException($"FAILURE changing controller '{plcCommPath}' to PROGRAM mode. Download not attempted.");
+                    ConsoleMessage($"SUCCESS changing controller '{plcCommPath}' to PROGRAM mode.", "STATUS", false);
 
-                // Download the specified ACD application to the controller.
-                ConsoleMessage($"START downloading ACD file to '{plcCommPath}'.", "NEWSECTION");
-                await DownloadProject_Async(plcCommPath, logixProject);
-                ConsoleMessage($"SUCCESS downloading ACD file to '{plcCommPath}'.", "STATUS", false);
+                    // Download the specified ACD application to the controller.
+                    ConsoleMessage($"START downloading ACD file to '{plcCommPath}'.", "NEWSECTION");
+                    await DownloadProject_Async(plcCommPath, logixProject);
+                    ConsoleMessage($"SUCCESS downloading ACD file to '{plcCommPath}'.", "STATUS", false);
 
-                // Change controller mode to test & verify.
-                ConsoleMessage($"START changing controller '{plcCommPath}' to RUN mode...", "NEWSECTION");
-                await ChangeControllerMode_Async(plcCommPath, "RUN", logixProject);
-                if (await ReadControllerMode_Async(plcCommPath, logixProject) != "RUN")
-                    throw new DeploymentAbortedException($"FAILURE changing controller '{plcCommPath}' to RUN mode.");
-                ConsoleMessage($"SUCCESS changing controller '{plcCommPath}' to RUN mode.", "STATUS", false);
+                    // Change controller mode to test & verify.
+                    ConsoleMessage($"START changing controller '{plcCommPath}' to RUN mode...", "NEWSECTION");
+                    await ChangeControllerMode_Async(plcCommPath, "RUN", logixProject);
+                    if (await ReadControllerMode_Async(plcCommPath, logixProject) != "RUN")
+                        throw new DeploymentAbortedException($"FAILURE changing controller '{plcCommPath}' to RUN mode.");
+                    ConsoleMessage($"SUCCESS changing controller '{plcCommPath}' to RUN mode.", "STATUS", false);
+                }
+                catch when (chassisCreated && deleteEchoChassis)
+                {
+                    await DeleteChassisAfterFailure_Async($"GeneratedChassis-{i + 1}");
+                    throw;
+                }
 
                 // Based on the static variable deleteEchoChassis, keep or delete the Logix Echo chassis (and its controllers) used to showcase deployment.
                 if (deleteEchoChassis)
@@ -221,6 +233,23 @@ namespace CD_Deployment
         }
 
         #region METHODS
+        /// <summary>
+        /// Best-effort removal of an emulated chassis after a failed deployment, so the original failure is still reported.
+        /// </summary>
+        /// <param name="chassisName">The name of the Logix Echo chassis to delete.</param>
+        private static async Task DeleteChassisAfterFailure_Async(string chassisName)
+        {
+            try
+            {
+                await LogixEchoMethods.DeleteChassis_Async(chassisName);
+                ConsoleMessage($"Deleted chassis '{chassisName}' after the failed deployment.", "STATUS");
+            }
+            catch (Exception e)
+            {
+                ConsoleMessage($"Unable to delete chassis '{chassisName}' after the failed deployment: {e.Message}", "ERROR");
+            }
+        }
+
         /// <summary>
         /// Read and validate every controller row of the deployment workbook.
         /// </summary>
