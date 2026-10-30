@@ -18,6 +18,7 @@ using System.Drawing;
 using System.Xml.Linq;
 using static ConsoleFormatter_ClassLibrary.ConsoleFormatter;
 using static ConsoleFormatter_ClassLibrary.FileManagement;
+using static ConsoleFormatter_ClassLibrary.PathSafety;
 using static LogixDesigner_ClassLibrary.LogixDesigner;
 using static RockwellAutomation.LogixDesigner.LogixProject;
 using static UnitTesting_ConsoleApp.StartUnitTest;
@@ -75,31 +76,39 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
 
             // Variables containing information about the L5X file to test.
             string iExcel_testObjectType;
-            string iExcel_testObjectFilePath;
+            string iExcel_testObjectRelativePath;
 
             // Populate the above variables from the input excel file.
             using (ExcelPackage package = new ExcelPackage(new FileInfo(inputExcelFilePath)))
             {
                 ExcelWorksheet inputExcelWorksheet = package.Workbook.Worksheets.FirstOrDefault()!;
                 iExcel_testObjectType = inputExcelWorksheet.Cells[9, 2].Value.ToString()!.Trim()!.ToUpper()!;
-                iExcel_testObjectFilePath = githubPath + inputExcelWorksheet.Cells[9, 3].Value.ToString()!.Trim()!;
+                iExcel_testObjectRelativePath = inputExcelWorksheet.Cells[9, 3].Value.ToString()!.Trim()!;
             }
 
             // Check if the test object file path starts and ends with quotation marks. If so, remove them.
-            if (iExcel_testObjectFilePath.StartsWith('"') && iExcel_testObjectFilePath.EndsWith('"'))
-                iExcel_testObjectFilePath = iExcel_testObjectFilePath[1..^1];
+            if (iExcel_testObjectRelativePath.Length >= 2 && iExcel_testObjectRelativePath.StartsWith('"') && iExcel_testObjectRelativePath.EndsWith('"'))
+                iExcel_testObjectRelativePath = iExcel_testObjectRelativePath[1..^1];
+
+            // The test object file must be inside the local GitHub folder.
+            string iExcel_testObjectFilePath = ResolvePathWithinFolder(githubPath, iExcel_testObjectRelativePath,
+                "Input excel workbook cell C9 (test object file path)");
             #endregion
 
             #region STAGING TEST: create emulated controller & chassis -> convert L5X to ACD -> download to ACD -> put controller in test mode
             string l5xFilePath = iExcel_testObjectFilePath;
-            string acdFilePath = generatedFilesFolderPath + currentDateTime + "_" + Path.GetFileNameWithoutExtension(l5xFilePath) + ".ACD";
+            string acdFilePath = EnsurePathWithinFolder(generatedFilesFolderPath + currentDateTime + "_" + Path.GetFileNameWithoutExtension(l5xFilePath) + ".ACD",
+                generatedFilesFolderPath, "Generated ACD file path");
 
             // Get variables needed to set up unit test. Information retreived from the L5X file specified in the input excel sheet.
-            string testObjectName = GetAttributeValue(l5xFilePath, "RSLogix5000Content", "TargetName", false)!;
+            string testObjectName = ValidateLogixName(GetAttributeValue(l5xFilePath, "RSLogix5000Content", "TargetName", false),
+                "RSLogix5000Content TargetName attribute");
 
             // Print message to console about the selected input excel test information.
-            string outputTextFilePath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.txt";
-            string outputExcelFilePath = reportAndGeneratedFilesFolderPath + @"2-excelreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.xlsx";
+            string outputTextFilePath = EnsurePathWithinFolder(reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_" + testObjectName +
+                "_UnitTestReport.txt", reportAndGeneratedFilesFolderPath + @"1-textreports\", "Output text report path");
+            string outputExcelFilePath = EnsurePathWithinFolder(reportAndGeneratedFilesFolderPath + @"2-excelreports\" + currentDateTime + "_" + testObjectName +
+                "_UnitTestReport.xlsx", reportAndGeneratedFilesFolderPath + @"2-excelreports\", "Output excel report path");
 
             Console.WriteLine("Unit test target object type:".PadRight(40, ' ') + "Full Application (L5X)");
             Console.WriteLine("Input excel workbook file path:".PadRight(40, ' ') + WrapText(inputExcelFilePath, 40, consoleCharLengthLimit));
@@ -911,8 +920,8 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             // Get the directory of the old file
             string directory = Path.GetDirectoryName(oldFilePath)!;
 
-            // Combine the directory, new file name, and extension to form the new file path
-            string newFilePath = Path.Combine(directory, newFileName);
+            // Combine the directory and new file name to form the new file path. The new name must not leave the directory.
+            string newFilePath = EnsurePathWithinFolder(Path.Combine(directory, ValidateFileName(newFileName)), directory, "Renamed file path");
 
             // Rename the file
             File.Move(oldFilePath, newFilePath);

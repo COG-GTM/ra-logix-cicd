@@ -11,10 +11,12 @@
 //
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+using ConsoleFormatter_ClassLibrary;
 using OfficeOpenXml;
 using UnitTesting_ConsoleApp.UnitTestScripts;
 using static ConsoleFormatter_ClassLibrary.ConsoleFormatter;
 using static ConsoleFormatter_ClassLibrary.FileManagement;
+using static ConsoleFormatter_ClassLibrary.PathSafety;
 
 namespace UnitTesting_ConsoleApp
 {
@@ -96,7 +98,8 @@ namespace UnitTesting_ConsoleApp
             string textFileReportPath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_UnitTestReport.txt";
 
             // Print out error message if input excel workbook does not exist and end script.
-            if (!File.Exists(inputExcelFilePath))
+            // A workbook name that is not a plain file name is reported as a failed test further below.
+            if (IsPlainFileName(inputExcelFileName) && !File.Exists(inputExcelFilePath))
             {
                 ConsoleMessage($"Specified input excel workbook named '{inputExcelFileName}' does not exist at '{inputExcelFilePath}'.", "ERROR");
                 return;
@@ -114,6 +117,19 @@ namespace UnitTesting_ConsoleApp
 
             // Create new test report file (.txt) using the Console printout.
             StartLogging(textFileReportPath);
+
+            // Fail the test if the input excel workbook name is not a plain file name. A FAIL report is written so that Jenkins does not read an older report.
+            try
+            {
+                ValidateFileName(inputExcelFileName);
+            }
+            catch (UnsafeInputException ex)
+            {
+                ConsoleMessage(ex.Message, "ERROR");
+                CreateBanner("UNIT TEST FINAL RESULT: FAIL");
+                StopLogging();
+                return;
+            }
 
             // Print unit test banner to the console.
             Console.WriteLine("\n  ".PadRight(consoleCharLengthLimit - 2, '='));
@@ -147,20 +163,30 @@ namespace UnitTesting_ConsoleApp
             }
 
             // Run the test script for the specific input target object.
-            if (iExcel_testObjectType == "APPLICATION.L5X")
-                await UnitTestScript_FullApp.RunTest(args);
-            else if (iExcel_testObjectType == "AOI_DEFINITION.L5X")
-                await UnitTestScript_AOI.RunTest(args);
-            else if (iExcel_testObjectType == "RUNG.L5X")
-                ConsoleMessage("Rung unit test has yet to be developed.", "ERROR");
-            else if (iExcel_testObjectType == "ROUTINE.L5X")
-                ConsoleMessage("Routine unit test has yet to be developed.", "ERROR");
-            else if (iExcel_testObjectType == "PROGRAM.L5X")
-                ConsoleMessage("Program unit test has yet to be developed.", "ERROR");
-            else
+            // A workbook or L5X value that points outside the allowed folders fails the test before any file is written.
+            try
             {
-                ConsoleMessage($"Test object type '{iExcel_testObjectType}' not supported. Select either AOI_Definition.L5X, Rung.L5X, Routine.L5X, " +
-                    $"Program.L5X, or Application.L5X.", "ERROR");
+                if (iExcel_testObjectType == "APPLICATION.L5X")
+                    await UnitTestScript_FullApp.RunTest(args);
+                else if (iExcel_testObjectType == "AOI_DEFINITION.L5X")
+                    await UnitTestScript_AOI.RunTest(args);
+                else if (iExcel_testObjectType == "RUNG.L5X")
+                    ConsoleMessage("Rung unit test has yet to be developed.", "ERROR");
+                else if (iExcel_testObjectType == "ROUTINE.L5X")
+                    ConsoleMessage("Routine unit test has yet to be developed.", "ERROR");
+                else if (iExcel_testObjectType == "PROGRAM.L5X")
+                    ConsoleMessage("Program unit test has yet to be developed.", "ERROR");
+                else
+                {
+                    ConsoleMessage($"Test object type '{iExcel_testObjectType}' not supported. Select either AOI_Definition.L5X, Rung.L5X, Routine.L5X, " +
+                        $"Program.L5X, or Application.L5X.", "ERROR");
+                }
+            }
+            catch (UnsafeInputException ex)
+            {
+                ConsoleMessage(ex.Message, "ERROR");
+                CreateBanner("UNIT TEST FINAL RESULT: FAIL");
+                StopLogging();
             }
         }
     }
