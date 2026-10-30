@@ -97,19 +97,9 @@ namespace UnitTesting_ConsoleApp
             string inputExcelFilePath = githubPath + @"2-cicd-config\1-ci-teststage\3-ci-inputexcelworkbooks\" + inputExcelFileName;
             string textFileReportPath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_UnitTestReport.txt";
 
-            // Print out error message if the input excel workbook name is not a plain file name and end script.
-            try
-            {
-                ValidateFileName(inputExcelFileName);
-            }
-            catch (UnsafeInputException ex)
-            {
-                ConsoleMessage(ex.Message, "ERROR");
-                return;
-            }
-
             // Print out error message if input excel workbook does not exist and end script.
-            if (!File.Exists(inputExcelFilePath))
+            // A workbook name that is not a plain file name is reported as a failed test further below.
+            if (IsPlainFileName(inputExcelFileName) && !File.Exists(inputExcelFilePath))
             {
                 ConsoleMessage($"Specified input excel workbook named '{inputExcelFileName}' does not exist at '{inputExcelFilePath}'.", "ERROR");
                 return;
@@ -127,6 +117,19 @@ namespace UnitTesting_ConsoleApp
 
             // Create new test report file (.txt) using the Console printout.
             StartLogging(textFileReportPath);
+
+            // Fail the test if the input excel workbook name is not a plain file name. A FAIL report is written so that Jenkins does not read an older report.
+            try
+            {
+                ValidateFileName(inputExcelFileName);
+            }
+            catch (UnsafeInputException ex)
+            {
+                ConsoleMessage(ex.Message, "ERROR");
+                CreateBanner("UNIT TEST FINAL RESULT: FAIL");
+                StopLogging();
+                return;
+            }
 
             // Print unit test banner to the console.
             Console.WriteLine("\n  ".PadRight(consoleCharLengthLimit - 2, '='));

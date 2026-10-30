@@ -51,7 +51,17 @@ namespace ConsoleFormatter_ClassLibrary
             if (Path.IsPathRooted(relativePath))
                 throw new UnsafeInputException($"{description} '{relativePath}' must be a path relative to '{rootFolderPath}'.");
 
-            return EnsurePathWithinFolder(Path.Combine(rootFolderPath, relativePath), rootFolderPath, description);
+            string fullPath = EnsurePathWithinFolder(Path.Combine(rootFolderPath, relativePath), rootFolderPath, description);
+
+            // A symbolic link or junction inside the root folder could point outside it, so reject any link between the root folder and the file.
+            string fullRootFolderPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootFolderPath));
+            for (string? current = fullPath; current != null && current.Length > fullRootFolderPath.Length; current = Path.GetDirectoryName(current))
+            {
+                if (new FileInfo(current).LinkTarget != null)
+                    throw new UnsafeInputException($"{description} '{relativePath}' passes through the link '{current}', which is not allowed.");
+            }
+
+            return fullPath;
         }
 
         /// <summary>
@@ -97,11 +107,24 @@ namespace ConsoleFormatter_ClassLibrary
         /// <exception cref="UnsafeInputException">The value contains directory separators or invalid file name characters.</exception>
         public static string ValidateFileName(string fileName)
         {
-            if (string.IsNullOrWhiteSpace(fileName) || fileName == "." || fileName == ".." || Path.GetFileName(fileName) != fileName ||
-                fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            if (!IsPlainFileName(fileName))
                 throw new UnsafeInputException($"'{fileName}' is not a valid file name.");
 
             return fileName;
+        }
+
+        /// <summary>
+        /// Check whether a value is a plain file name with no directory parts.
+        /// </summary>
+        /// <param name="fileName">The file name to check.</param>
+        /// <returns>True if the value is a plain file name; otherwise false.</returns>
+        public static bool IsPlainFileName(string fileName)
+        {
+            return !string.IsNullOrWhiteSpace(fileName)
+                && fileName != "."
+                && fileName != ".."
+                && Path.GetFileName(fileName) == fileName
+                && fileName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0;
         }
     }
 }
