@@ -19,6 +19,9 @@ pipeline {
     environment {
         PATH_JENKINS_GITHUB = "C:\\data\\jenkins_home\\workspace\\${env.JOB_NAME}\\"
         PATH_GEN_FILES_AND_REPORTS = "C:\\CI-Pipeline-Files\\"
+        // Build output is kept outside the repository checkout so a committed binary can never be picked up instead of the fresh build.
+        // No trailing backslash: dotnet would read '\"' as an escaped quote.
+        PATH_BUILD_OUTPUT = "C:\\data\\jenkins_home\\workspace\\${env.JOB_NAME}@tmp\\ci-unittest-build"
         GITHUB_DEV_BRANCH = 'develop/datatype-bounds'
         GITHUB_RELEASE_BRANCH = 'release/v1.0.0'
         FINAL_TEST_RESULT = "PASS"
@@ -29,6 +32,17 @@ pipeline {
     }
 
     stages {
+        // BUILD STAGE: This stage compiles the UnitTesting_ConsoleApp C# solution from the source in the GitHub repository. Pre-built binaries are never
+        //              executed: the pipeline stops if any bin/obj build output is tracked in git, then publishes a clean Release build to PATH_BUILD_OUTPUT.
+        stage('Build') {
+            steps {
+                createBanner('STAGE: Build')
+                script {
+                    buildFromSource("2-cicd-config\\1-ci-teststage\\2-ci-unittestscript\\UnitTesting_ConsoleApp\\UnitTesting_ConsoleApp.csproj",
+                        env.PATH_BUILD_OUTPUT)
+                }
+            }
+        }
         // TEST STAGE: This stage runs the CI_Deployment C# solution created using the EchoSDK & LDSDK. The script executes unit testing on some target 
         //             component (full application ACD or Add-On Definition L5X) using test cases established in excel workbooks stored at the below location.
         //             (.\2-cicd-config\1-ci-teststage\3-ci-inputexcelworkbooks\)
@@ -37,8 +51,8 @@ pipeline {
                 createBanner('STAGE: Test')
                 script {
                     def inputExcelWorkbooksFolderPath = "${env.PATH_JENKINS_GITHUB}2-cicd-config\\1-ci-teststage\\3-ci-inputexcelworkbooks"
-                    def executable_filePath = "${env.PATH_JENKINS_GITHUB}2-cicd-config\\1-ci-teststage\\2-ci-unittestscript\\UnitTesting_ConsoleApp\\bin\\" +
-                        "Release\\net8.0\\UnitTesting_ConsoleApp.exe"
+                    // Run the executable produced by the Build stage, never a binary from the repository checkout.
+                    def executable_filePath = "${env.PATH_BUILD_OUTPUT}\\UnitTesting_ConsoleApp.exe"
 
                     // Get all file names in the specified folder
                     def excelFileNames = powershell(
@@ -48,7 +62,7 @@ pipeline {
 
                     // Loop through each excel workbook file name and execute the test script for each workbook. 
                     excelFileNames.each { fileName ->
-                        bat(script: "@${executable_filePath} ${env.PATH_JENKINS_GITHUB} ${fileName.trim()} \"${env.GITHUB_USER_NAME}\" ${env.GITHUB_USER_EMAIL} " +
+                        bat(script: "@\"${executable_filePath}\" ${env.PATH_JENKINS_GITHUB} ${fileName.trim()} \"${env.GITHUB_USER_NAME}\" ${env.GITHUB_USER_EMAIL} " +
                             "\"${env.GITHUB_COMMIT_MSG}\" ${env.GITHUB_COMMIT_HASH} ${env.JOB_NAME} ${env.BUILD_NUMBER} ${env.PATH_GEN_FILES_AND_REPORTS}")
 
                         // Get the phrase "PASS" or "FAIL" from the final banner displayed in the text report.
@@ -161,4 +175,21 @@ def trimFinalTextReportBanner(folderPath) {
         echo "No text files found in the folder: ${folderPath}"
         return "ERROR: no file found."
     }
+}
+
+// Function to compile a C# project from source into a clean output folder outside the repository checkout. Fails the build if any bin/obj build output
+// is tracked in git, because a committed binary shows up in a pull request only as "binary file changed" and cannot be reviewed.
+def buildFromSource(projectRelativePath, outputFolderPath) {
+    def trackedBuildOutput = powershell(
+        script: "git -C '${env.PATH_JENKINS_GITHUB}' ls-files -- ':(icase)bin/*' ':(icase)obj/*' ':(icase)*/bin/*' ':(icase)*/obj/*'",
+        returnStdout: true
+    ).trim()
+    if (trackedBuildOutput) {
+        error("Build output is committed to the repository and will not be used. Remove these files from git:\n${trackedBuildOutput}")
+    }
+
+    bat(script: """
+        @if exist "${outputFolderPath}" rmdir /s /q "${outputFolderPath}"
+        @dotnet publish "${env.PATH_JENKINS_GITHUB}${projectRelativePath}" --configuration Release --no-incremental --output "${outputFolderPath}"
+        """)
 }
