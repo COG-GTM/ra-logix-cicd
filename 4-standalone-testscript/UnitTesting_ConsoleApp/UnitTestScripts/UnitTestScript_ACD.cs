@@ -175,7 +175,12 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             if (!IsValidLogixName(testObjectName))
             {
                 ConsoleMessage($"RSLogix5000Content TargetName in '{l5xFilePath}' is not a valid Logix name ({LogixNameRules}). " +
-                    "Unit test stopped before any files were generated from it.", "ERROR");
+                    "Unit test stopped before any report files were generated from it.", "ERROR");
+
+                if (!iExcel_keepL5Xs)
+                    File.Delete(l5xFilePath);
+                if (!Directory.EnumerateFileSystemEntries(generatedFilesFolderPath).Any())
+                    Directory.Delete(generatedFilesFolderPath, true);
                 return;
             }
 
