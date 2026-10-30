@@ -114,7 +114,7 @@ namespace ConsoleFormatter_ClassLibrary
         /// <param name="rootFolderPath">The folder the resolved path must stay within (for example, the local GitHub folder path).</param>
         /// <param name="relativePath">The path relative to the root folder.</param>
         /// <returns>The full path of the resolved file.</returns>
-        /// <exception cref="InvalidDataException">Thrown if the path is empty, rooted, or resolves outside the root folder.</exception>
+        /// <exception cref="InvalidDataException">Thrown if the path is empty, rooted, resolves outside the root folder, or goes through a link.</exception>
         public static string ResolvePathWithinFolder(string rootFolderPath, string relativePath)
         {
             string normalizedRelativePath = relativePath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
@@ -127,11 +127,21 @@ namespace ConsoleFormatter_ClassLibrary
             if (fullPath.Length <= fullRootPath.Length || !fullPath.StartsWith(fullRootPath, comparison))
                 throw new InvalidDataException($"Path '{relativePath}' resolves to '{fullPath}', which is outside '{fullRootPath}'.");
 
+            // Reject symbolic links and junctions below the root folder so the resolved path cannot be redirected outside it.
+            string currentPath = fullRootPath;
+            foreach (string pathPart in fullPath[fullRootPath.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                currentPath = Path.Combine(currentPath, pathPart);
+                if ((File.Exists(currentPath) || Directory.Exists(currentPath) || new FileInfo(currentPath).LinkTarget != null)
+                    && File.GetAttributes(currentPath).HasFlag(FileAttributes.ReparsePoint))
+                    throw new InvalidDataException($"Path '{relativePath}' goes through the link '{currentPath}', which is not allowed.");
+            }
+
             return fullPath;
         }
 
         // Studio 5000 Logix Designer component names: a letter or underscore, then letters, digits, or underscores (40 characters max).
-        private static readonly Regex logixComponentNameRegex = new(@"^[A-Za-z_][A-Za-z0-9_]{0,39}$", RegexOptions.CultureInvariant);
+        private static readonly Regex logixComponentNameRegex = new(@"\A[A-Za-z_][A-Za-z0-9_]{0,39}\z", RegexOptions.CultureInvariant);
 
         /// <summary>
         /// Validate that a name read from an L5X file is a valid Studio 5000 Logix Designer component name, so it is safe to use in file names.
