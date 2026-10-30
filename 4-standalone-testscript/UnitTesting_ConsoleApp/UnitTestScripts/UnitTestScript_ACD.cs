@@ -17,6 +17,7 @@ using RockwellAutomation.LogixDesigner.Logging;
 using System.Drawing;
 using System.Xml.Linq;
 using static ConsoleFormatter_ClassLibrary.ConsoleFormatter;
+using static ConsoleFormatter_ClassLibrary.SafeFilePaths;
 using static LogixDesigner_ClassLibrary.LogixDesigner;
 using static RockwellAutomation.LogixDesigner.LogixProject;
 
@@ -169,6 +170,19 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
 
             // Get variables needed to set up unit test. Information retreived from the ACD file specified in the input excel sheet.
             string testObjectName = GetAttributeValue(l5xFilePath, "RSLogix5000Content", "TargetName", false)!;
+
+            // The controller name is used to build the report file name, so reject anything that is not a valid Logix name.
+            if (!IsValidLogixName(testObjectName))
+            {
+                ConsoleMessage($"RSLogix5000Content TargetName in '{l5xFilePath}' is not a valid Logix name ({LogixNameRules}). " +
+                    "Unit test stopped before any report files were generated from it.", "ERROR");
+
+                if (!iExcel_keepL5Xs)
+                    File.Delete(l5xFilePath);
+                if (!Directory.EnumerateFileSystemEntries(generatedFilesFolderPath).Any())
+                    Directory.Delete(generatedFilesFolderPath, true);
+                return;
+            }
 
             // Capture and print event logger information to the console. (Useful during troubleshooting.)
             if (showFullEventLog)
@@ -877,11 +891,12 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             string directory = Path.GetDirectoryName(oldFilePath)!;
 
             // Combine the directory, new file name, and extension to form the new file path
-            string newFilePath = Path.Combine(directory, newFileName);
+            // (CombineWithinFolder rejects names that would move the file out of its current folder.)
+            string newFilePath = CombineWithinFolder(directory, newFileName);
 
             // Rename the file
             File.Move(oldFilePath, newFilePath);
         }
         #endregion
     }
-}
+}

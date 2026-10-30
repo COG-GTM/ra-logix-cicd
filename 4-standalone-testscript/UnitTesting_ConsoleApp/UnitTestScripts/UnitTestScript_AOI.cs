@@ -19,6 +19,7 @@ using System.Drawing;
 using System.Text;
 using System.Xml.Linq;
 using static ConsoleFormatter_ClassLibrary.ConsoleFormatter;
+using static ConsoleFormatter_ClassLibrary.SafeFilePaths;
 using static LogixDesigner_ClassLibrary.LogixDesigner;
 using static RockwellAutomation.LogixDesigner.LogixProject;
 
@@ -187,6 +188,14 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             string testObjectName = GetAttributeValue(iExcel_testObjectFilePath, "AddOnInstructionDefinition", "Name", false)!;
             string softwareRevision = GetAttributeValue(iExcel_testObjectFilePath, "RSLogix5000Content", "SoftwareRevision", false)!;
 
+            // The AOI name is used to build generated file names, so reject anything that is not a valid Logix name (e.g. "..\" path segments).
+            if (!IsValidLogixName(testObjectName))
+            {
+                ConsoleMessage($"AddOnInstructionDefinition Name in '{iExcel_testObjectFilePath}' is not a valid Logix name ({LogixNameRules}). " +
+                    "Unit test stopped before any files were generated from it.", "ERROR");
+                return;
+            }
+
             /* Create the ACD file to host unit test.
                 * (Note that these steps are necessary in order to include a program within 'Controller Fault Handler' in Studio 5k.)
                     Step 1. Get a string containing the xml contents needed to make the basic L5X application file without the test target object.
@@ -197,11 +206,11 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             string l5xFileContents = L5XFiles.GetFaultHandlingApplicationL5XContents_ForRoutine(routineName_Cont, routineName_Event, programName_Cont,
                 programName_Event, taskName_Cont, taskName_Event, routineName_FaultHandler, programName_FaultHandler,
                 controllerName, processorType, softwareRevision);                                              // Step 1: Get L5X contents.
-            string partialL5XprojectFilePath = generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_Basic.L5X";
+            string partialL5XprojectFilePath = CombineWithinFolder(generatedFilesFolderPath, currentDateTime + "_" + testObjectName + "_Basic.L5X");
             File.WriteAllText(partialL5XprojectFilePath, l5xFileContents);                                     // Step 2: Generate new L5X file.
             LogixProject logixProjectL5X = await OpenLogixProjectAsync(partialL5XprojectFilePath);             // Step 3: Open L5X file.
             ConsoleMessage($"L5X application file created & opened at '{partialL5XprojectFilePath}'.", "STATUS");
-            string acdFilePath = generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_WithAOI.ACD";
+            string acdFilePath = CombineWithinFolder(generatedFilesFolderPath, currentDateTime + "_" + testObjectName + "_WithAOI.ACD");
             await logixProjectL5X.SaveAsAsync(acdFilePath, true);                                              // Step 4: Convert L5X to ACD.
             LogixProject logixProject = await OpenLogixProjectAsync(acdFilePath);                              // Step 5: Open ACD file.
             ConsoleMessage($"ACD application file created & opened at '{acdFilePath}'.", "STATUS");
@@ -257,7 +266,7 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             else
                 ConsoleMessage("FAILURE changing controller to TEST mode.", "ERROR", false);
 
-            string fullL5XprojectFilePath = generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_FullProj.L5X";
+            string fullL5XprojectFilePath = CombineWithinFolder(generatedFilesFolderPath, currentDateTime + "_" + testObjectName + "_FullProj.L5X");
             await logixProject.SaveAsAsync(fullL5XprojectFilePath, true);
             #endregion
 
@@ -2197,14 +2206,15 @@ This a programmatically created rung with a populated instance of the AOI instru
             if (!File.Exists(sourceFilePath))
                 ConsoleMessage($"Source file '{sourceFilePath}' does not exist.", "ERROR");
 
-            string targetObjectName = GetAttributeValue(sourceFilePath, "AddOnInstructionDefinition", "Name", printOut)!;
+            string targetObjectName = RequireValidLogixName(GetAttributeValue(sourceFilePath, "AddOnInstructionDefinition", "Name", printOut),
+                $"AddOnInstructionDefinition Name in '{sourceFilePath}'");
 
             // Get the directory and file name from the source file path.
             string extension = Path.GetExtension(sourceFilePath);
 
             // Construct the new file path for the copied file.
             string newFileName = $"{currentDateTime}_{targetObjectName}_AOIRoutine{extension}";
-            string newFilePath = Path.Combine(outputFolderPath, newFileName);
+            string newFilePath = CombineWithinFolder(outputFolderPath, newFileName);
 
             File.Copy(sourceFilePath, newFilePath, overwrite: true);
 
@@ -2222,7 +2232,8 @@ This a programmatically created rung with a populated instance of the AOI instru
             string directory = Path.GetDirectoryName(oldFilePath)!;
 
             // Combine the directory, new file name, and extension to form the new file path
-            string newFilePath = Path.Combine(directory, newFileName);
+            // (CombineWithinFolder rejects names that would move the file out of its current folder.)
+            string newFilePath = CombineWithinFolder(directory, newFileName);
 
             // Rename the file
             File.Move(oldFilePath, newFilePath);

@@ -95,7 +95,8 @@ namespace ConsoleFormatter_ClassLibrary
             string directory = Path.GetDirectoryName(oldFilePath)!;
 
             // Combine the directory, new file name, and extension to form the new file path
-            string newFilePath = Path.Combine(directory, newFileName);
+            // (CombineWithinFolder rejects names that would move the file out of its current folder.)
+            string newFilePath = SafeFilePaths.CombineWithinFolder(directory, newFileName);
 
             // Rename the file
             File.Move(oldFilePath, newFilePath);

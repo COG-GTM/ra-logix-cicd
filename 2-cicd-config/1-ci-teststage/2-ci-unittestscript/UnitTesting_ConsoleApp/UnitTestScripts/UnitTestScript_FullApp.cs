@@ -17,6 +17,7 @@ using RockwellAutomation.LogixDesigner.Logging;
 using System.Drawing;
 using System.Xml.Linq;
 using static ConsoleFormatter_ClassLibrary.ConsoleFormatter;
+using static ConsoleFormatter_ClassLibrary.SafeFilePaths;
 using static ConsoleFormatter_ClassLibrary.FileManagement;
 using static LogixDesigner_ClassLibrary.LogixDesigner;
 using static RockwellAutomation.LogixDesigner.LogixProject;
@@ -97,9 +98,19 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             // Get variables needed to set up unit test. Information retreived from the L5X file specified in the input excel sheet.
             string testObjectName = GetAttributeValue(l5xFilePath, "RSLogix5000Content", "TargetName", false)!;
 
+            // The controller name is used to build report file names, so reject anything that is not a valid Logix name.
+            if (!IsValidLogixName(testObjectName))
+            {
+                ConsoleMessage($"RSLogix5000Content TargetName in '{l5xFilePath}' is not a valid Logix name ({LogixNameRules}). " +
+                    "Unit test stopped before any files were generated from it.", "ERROR");
+                CreateBanner("UNIT TEST FINAL RESULT: FAIL");
+                StopLogging();
+                return;
+            }
+
             // Print message to console about the selected input excel test information.
-            string outputTextFilePath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.txt";
-            string outputExcelFilePath = reportAndGeneratedFilesFolderPath + @"2-excelreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.xlsx";
+            string outputTextFilePath = CombineWithinFolder(reportAndGeneratedFilesFolderPath + @"1-textreports\", currentDateTime + "_" + testObjectName + "_UnitTestReport.txt");
+            string outputExcelFilePath = CombineWithinFolder(reportAndGeneratedFilesFolderPath + @"2-excelreports\", currentDateTime + "_" + testObjectName + "_UnitTestReport.xlsx");
 
             Console.WriteLine("Unit test target object type:".PadRight(40, ' ') + "Full Application (L5X)");
             Console.WriteLine("Input excel workbook file path:".PadRight(40, ' ') + WrapText(inputExcelFilePath, 40, consoleCharLengthLimit));
@@ -912,7 +923,8 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             string directory = Path.GetDirectoryName(oldFilePath)!;
 
             // Combine the directory, new file name, and extension to form the new file path
-            string newFilePath = Path.Combine(directory, newFileName);
+            // (CombineWithinFolder rejects names that would move the file out of its current folder.)
+            string newFilePath = CombineWithinFolder(directory, newFileName);
 
             // Rename the file
             File.Move(oldFilePath, newFilePath);
