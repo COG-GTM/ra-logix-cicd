@@ -33,7 +33,7 @@ pipeline {
 
     stages {
         // BUILD STAGE: This stage compiles the UnitTesting_ConsoleApp C# solution from the source in the GitHub repository. Pre-built binaries are never
-        //              executed: the pipeline stops if any bin/obj build output is tracked in git, then publishes a clean Release build to PATH_BUILD_OUTPUT.
+        //              executed: the pipeline stops if any bin/obj build output is tracked in git, then compiles a clean Release build into PATH_BUILD_OUTPUT.
         stage('Build') {
             steps {
                 createBanner('STAGE: Build')
@@ -190,6 +190,6 @@ def buildFromSource(projectRelativePath, outputFolderPath) {
 
     bat(script: """
         @if exist "${outputFolderPath}" rmdir /s /q "${outputFolderPath}"
-        @dotnet publish "${env.PATH_JENKINS_GITHUB}${projectRelativePath}" --configuration Release --no-incremental --output "${outputFolderPath}"
+        @dotnet build "${env.PATH_JENKINS_GITHUB}${projectRelativePath}" --configuration Release --no-incremental --output "${outputFolderPath}"
         """)
 }
