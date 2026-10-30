@@ -40,11 +40,15 @@ ra-logix-cicd
 
 
 
-Continuous Integration Unit Testing Executable File Path:
-2-cicd-config\1-ci-teststage\2-ci-unittestscript\UnitTesting_ConsoleApp\bin\Release\net8.0\UnitTesting_ConsoleApp.exe
+Build output (bin\ and obj\ folders) is not stored in this repository. The CI and CD Jenkins pipelines compile their C# solutions from source in a
+'Build' stage (dotnet build --configuration Release --no-incremental) and run the freshly built executable from a folder outside the repository checkout.
+The pipelines stop if any bin\ or obj\ file is committed. Build the solutions locally with Visual Studio or dotnet build to run them by hand.
 
-Continuous Deployment Executable File Path:
-2-cicd-config\2-cd-deploystage\2-cd-deploymentscript\CD_Deployment\bin\Release\net8.0\CD_Deployment.exe
+Continuous Integration Unit Testing Project (built by Jenkinsfile_CI to <workspace>@tmp\ci-unittest-build\UnitTesting_ConsoleApp.exe):
+2-cicd-config\1-ci-teststage\2-ci-unittestscript\UnitTesting_ConsoleApp\UnitTesting_ConsoleApp.csproj
 
-Standalone Unit Testing Executable File Path:
+Continuous Deployment Project (built by Jenkinsfile_CD to <workspace>@tmp\cd-deployment-build\CD_Deployment.exe):
+2-cicd-config\2-cd-deploystage\2-cd-deploymentscript\CD_Deployment\CD_Deployment.csproj
+
+Standalone Unit Testing Executable File Path (after a local Release build):
 4-standalone-testscript\UnitTesting_ConsoleApp\bin\Release\net8.0\AOIUnitTesting_ConsoleApp.exe

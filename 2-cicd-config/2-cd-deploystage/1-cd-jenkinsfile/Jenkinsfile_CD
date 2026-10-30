@@ -19,9 +19,22 @@ pipeline {
     environment {
         PATH_JENKINS_GITHUB = "C:\\data\\jenkins_home\\workspace\\${env.JOB_NAME}\\"
         PATH_GEN_FILES = "C:\\CD-Pipeline-Files\\"
+        // Build output is kept outside the repository checkout so a committed binary can never be picked up instead of the fresh build.
+        // No trailing backslash: dotnet would read '\"' as an escaped quote.
+        PATH_BUILD_OUTPUT = "C:\\data\\jenkins_home\\workspace\\${env.JOB_NAME}@tmp\\cd-deployment-build"
     }
 
     stages {
+        // BUILD STAGE: This stage compiles the CD_Deployment C# solution from the source in the GitHub repository. Pre-built binaries are never executed:
+        //              the pipeline stops if any bin/obj build output is tracked in git, then compiles a clean Release build into PATH_BUILD_OUTPUT.
+        stage('Build') {
+            steps {
+                script {
+                    createBanner('STAGE: Build')
+                    buildFromSource("2-cicd-config\\2-cd-deploystage\\2-cd-deploymentscript\\CD_Deployment\\CD_Deployment.csproj", env.PATH_BUILD_OUTPUT)
+                }
+            }
+        }
         // DEPLOY STAGE: This stage runs the CD_Deployment C# solution created using the EchoSDK & LDSDK. The script downloads the verified ACDs to
         //               controllers specified within the input excel workbook stored in the GitHub repository at the file path below.
         //               (.\2-cicd-config\2-cd-deploystage\3-cd-inputexcelworkbooks\DeployToControllersWorkbook.xlsx)
@@ -30,11 +43,11 @@ pipeline {
                 script {
                     createBanner('STAGE: Deploy')
 
-                    def executable_filePath = "${env.PATH_JENKINS_GITHUB}2-cicd-config\\2-cd-deploystage\\2-cd-deploymentscript\\CD_Deployment\\bin\\Release\\" +
-                        "net8.0\\CD_Deployment.exe"
+                    // Run the executable produced by the Build stage, never a binary from the repository checkout.
+                    def executable_filePath = "${env.PATH_BUILD_OUTPUT}\\CD_Deployment.exe"
                     
                     bat(
-                        script: "@${executable_filePath} ${env.PATH_JENKINS_GITHUB} ${env.PATH_GEN_FILES}"
+                        script: "@\"${executable_filePath}\" ${env.PATH_JENKINS_GITHUB} ${env.PATH_GEN_FILES}"
                     )
                 }
             }
@@ -55,4 +68,21 @@ def createBanner(bannerName) {
         def finalBanner = '-=[' + bannerName + ']=-'
         echo finalBanner.padRight(180, '-')
     }
+}
+
+// Function to compile a C# project from source into a clean output folder outside the repository checkout. Fails the build if any bin/obj build output
+// is tracked in git, because a committed binary shows up in a pull request only as "binary file changed" and cannot be reviewed.
+def buildFromSource(projectRelativePath, outputFolderPath) {
+    def trackedBuildOutput = powershell(
+        script: "git -C '${env.PATH_JENKINS_GITHUB}' ls-files -- ':(icase)bin/*' ':(icase)obj/*' ':(icase)*/bin/*' ':(icase)*/obj/*'",
+        returnStdout: true
+    ).trim()
+    if (trackedBuildOutput) {
+        error("Build output is committed to the repository and will not be used. Remove these files from git:\n${trackedBuildOutput}")
+    }
+
+    bat(script: """
+        @if exist "${outputFolderPath}" rmdir /s /q "${outputFolderPath}"
+        @dotnet build "${env.PATH_JENKINS_GITHUB}${projectRelativePath}" --configuration Release --no-incremental --output "${outputFolderPath}"
+        """)
 }
