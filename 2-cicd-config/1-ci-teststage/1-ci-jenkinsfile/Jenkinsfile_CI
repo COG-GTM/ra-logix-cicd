@@ -22,10 +22,16 @@ pipeline {
         GITHUB_DEV_BRANCH = 'develop/datatype-bounds'
         GITHUB_RELEASE_BRANCH = 'release/v1.0.0'
         FINAL_TEST_RESULT = "PASS"
-        GITHUB_USER_EMAIL = powershell(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
-        GITHUB_USER_NAME = powershell(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
-        GITHUB_COMMIT_HASH = powershell(script: "git log -1 --pretty=format:'%H'", returnStdout: true).trim()
-        GITHUB_COMMIT_MSG = powershell(script: "git log -1 --pretty=format:'%s'", returnStdout: true).trim()
+        // Absolute paths to the Git and GitHub CLI executables on the Jenkins agent. Update these if the tools are installed elsewhere.
+        // Never call git/gh by bare name: cmd.exe searches the current directory (the checkout) first, so a committed git.bat or gh.bat would run instead.
+        GIT_EXE = 'C:\\Program Files\\Git\\cmd\\git.exe'
+        GH_EXE = 'C:\\Program Files\\GitHub CLI\\gh.exe'
+        // Stops cmd.exe from resolving bare command names against the current directory in every bat step.
+        NoDefaultCurrentDirectoryInExePath = '1'
+        GITHUB_USER_EMAIL = powershell(script: "& '${GIT_EXE}' log -1 --pretty=format:'%ae'", returnStdout: true).trim()
+        GITHUB_USER_NAME = powershell(script: "& '${GIT_EXE}' log -1 --pretty=format:'%an'", returnStdout: true).trim()
+        GITHUB_COMMIT_HASH = powershell(script: "& '${GIT_EXE}' log -1 --pretty=format:'%H'", returnStdout: true).trim()
+        GITHUB_COMMIT_MSG = powershell(script: "& '${GIT_EXE}' log -1 --pretty=format:'%s'", returnStdout: true).trim()
     }
 
     stages {
@@ -79,36 +85,46 @@ pipeline {
                         bat """
                             setlocal
 
+                            :: Only run the agent's own git/gh installs, never a git or gh program committed to the checkout.
+                            if not exist "%GIT_EXE%" (
+                                echo ERROR: Git executable not found at "%GIT_EXE%". Set GIT_EXE in the Jenkinsfile environment block.
+                                exit /b 1
+                            )
+                            if not exist "%GH_EXE%" (
+                                echo ERROR: GitHub CLI executable not found at "%GH_EXE%". Set GH_EXE in the Jenkinsfile environment block.
+                                exit /b 1
+                            )
+
                             :: Set the local user info for the Jenkins job agent to the commiter's info.
                             cd ${env.PATH_JENKINS_GITHUB}
-                            git config --global --replace-all user.email ${env.GITHUB_USER_EMAIL}
-                            git config --global --replace-all user.name ${env.GITHUB_USER_NAME}
+                            "%GIT_EXE%" config --global --replace-all user.email ${env.GITHUB_USER_EMAIL}
+                            "%GIT_EXE%" config --global --replace-all user.name ${env.GITHUB_USER_NAME}
 
                             :: Fetch all branches 
-                            git fetch --all 
+                            "%GIT_EXE%" fetch --all 
 
                             :: Check if the release/pending-pr-${env.BUILD_NUMBER} branch exists
-                            git show-ref --verify --quiet refs/heads/release/pending-pr-${env.BUILD_NUMBER}
+                            "%GIT_EXE%" show-ref --verify --quiet refs/heads/release/pending-pr-${env.BUILD_NUMBER}
                             if %errorlevel% neq 0 ( 
                                 echo Branch 'release/pending-pr-${env.BUILD_NUMBER}' does not exist. Creating it. 
-                                git checkout -b release/pending-pr-${env.BUILD_NUMBER}
+                                "%GIT_EXE%" checkout -b release/pending-pr-${env.BUILD_NUMBER}
                             ) else ( 
                                 echo Branch 'release/pending-pr-${env.BUILD_NUMBER}' exists. Checking it out. 
-                                git checkout release/pending-pr-${env.BUILD_NUMBER} 
-                                git merge origin/${env.GITHUB_DEV_BRANCH}
+                                "%GIT_EXE%" checkout release/pending-pr-${env.BUILD_NUMBER} 
+                                "%GIT_EXE%" merge origin/${env.GITHUB_DEV_BRANCH}
                             ) 
                             
                             :: Push changes to the remote repository 
-                            git push origin release/pending-pr-${env.BUILD_NUMBER}
+                            "%GIT_EXE%" push origin release/pending-pr-${env.BUILD_NUMBER}
 
-                            git add .
-                            git commit -m \"${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: ${env.BUILD_NUMBER}\"
-                            git push --set-upstream origin release/pending-pr-${env.BUILD_NUMBER}
+                            "%GIT_EXE%" add .
+                            "%GIT_EXE%" commit -m \"${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: ${env.BUILD_NUMBER}\"
+                            "%GIT_EXE%" push --set-upstream origin release/pending-pr-${env.BUILD_NUMBER}
 
                             endlocal
                             """
 
-                            def prCommand = 'gh pr create --title "' + "${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: " + 
+                            def prCommand = '"%GH_EXE%" pr create --title "' + "${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: " + 
                                             "${env.BUILD_NUMBER}\" " + '--body "' + "${pr_messagecontents}\" " + '--base ' + "${env.GITHUB_RELEASE_BRANCH} " + 
                                             '--head ' + "release/pending-pr-${env.BUILD_NUMBER}" 
                             bat prCommand

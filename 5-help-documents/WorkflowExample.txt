@@ -65,6 +65,9 @@ Troubleshooting | Misc Suggestions
 -   If the GitHub client needs to be installed, run the below two commands one by one in a Jenkins command prompt/powershell:
     'winget install --id GitHub.cli'
     'gh auth login'
+-   The CI Jenkinsfile runs Git and the GitHub CLI by absolute path (GIT_EXE and GH_EXE in its environment block, defaulting to
+    'C:\Program Files\Git\cmd\git.exe' and 'C:\Program Files\GitHub CLI\gh.exe') so a git/gh program committed to the repository can never run
+    in their place. If either tool is installed elsewhere (check with 'where.exe git' and 'where.exe gh'), update those two paths.
 -   If running into GitHub permissions issues, check to see if your repository is private. If so, establish proper connections using your personal acces token.
     Try executing the below command if you have a personal acces token:
     git remote set-url origin "https://<insert_github_username>:<insert_github_pers_acc_token>@github.com/<insert_github_username/<insert_github_repo_name>.git"
