@@ -40,13 +40,15 @@ namespace CD_Deployment
         /// </summary>
         /// <param name="args">
         /// args[0] = The file path to the local GitHub folder (example format: C:\Users\TestUser\Desktop\example-github-repo\).<br/>
-        /// args[1] = The folder path to which generated files will be saved during testing (example format: C:\CI-Pipeline-Files\).
+        /// args[1] = The folder path to which generated files will be saved during testing (example format: C:\CI-Pipeline-Files\).<br/>
+        /// The environment variable CD_APPROVED_CONTROLLERS_FILE must name a file, kept outside the repository, listing the approved controller
+        /// communication paths (one per line).
         ///</param>
-        /// <returns>A Task that programmatically downloads ACDs to controllers.</returns>
-        static async Task Main(string[] args)
+        /// <returns>A Task that programmatically downloads ACDs to controllers and returns the process exit code (0 = success).</returns>
+        static async Task<int> Main(string[] args)
         {
             // Handle incorrect number of arguments console output.
-            if ((args.Length < 1) || (args.Length > 2))
+            if (args.Length != 2)
             {
                 CreateBanner("INCORRECT NUMBER OF INPUTS");
                 Console.WriteLine("Correct Command: ".PadRight(20, ' ') + WrapText(@".\CD_Deployment.exe inputExcelFilePath reportAndGeneratedFilesFolderPath",
@@ -54,6 +56,7 @@ namespace CD_Deployment
                 Console.WriteLine("Example Format: ".PadRight(20, ' ') + WrapText(@".\CD_Deployment.exe C:\Users\RAUser\Desktop\2-cicd-config\2-cd-deploystage\
                     3-cd-inputexcelworkbooks\DeployToControllersWorkbook.xlsx C:\CI-Pipeline-Files\", 20, consoleCharLengthLimit));
                 CreateBanner("END");
+                return 2;
             }
 
             // Parse the input excel sheet needed to determine which modules are to have their firmware verified & flashed if needed.
@@ -62,7 +65,8 @@ namespace CD_Deployment
                                                                       Note that this input argument is only included to demo downloading with no hardware present. 
                                                                       This input argument reference can be freely deleted if no emulated controllers are included
                                                                       in the DeployToControllersWorkbook excel workbook list of target download controllers.*/
-            string inputExcelFilePath = githubPath + @"2-cicd-config\2-cd-deploystage\3-cd-inputexcelworkbooks\DeployToControllersWorkbook.xlsx";
+            string inputExcelFilePath = Path.Combine(githubPath, "2-cicd-config", "2-cd-deploystage", "3-cd-inputexcelworkbooks",
+                "DeployToControllersWorkbook.xlsx");
 
             // Create the local folders that will contain the test reports and generated file contents.
             if (!Directory.Exists(reportAndGeneratedFilesFolderPath))
@@ -84,20 +88,50 @@ namespace CD_Deployment
             CreateBanner("DEPLOYMENT INFO");
             ConsoleMessage("START downloading specified ACD application files to specified controllers...", "NEWSECTION", false);
             ConsoleMessage($"Input excel workbook used is '{inputExcelFilePath}'.", "STATUS");
+
+            try
+            {
+                await DeployAsync(githubPath, reportAndGeneratedFilesFolderPath, inputExcelFilePath);
+            }
+            catch (Exception e) when (e is DeploymentAbortedException || e is InvalidOperationException)
+            {
+                ConsoleMessage(e.Message, "ERROR");
+                CreateBanner("CD DEPLOYMENT ABORTED");
+                return 1;
+            }
+
+            // Compute how long the test took to run and print final banner.
+            DateTime testEndTime = DateTime.Now;
+            TimeSpan testLength = testEndTime.Subtract(testStartTime);
+            string formattedTestLength = testLength.ToString(@"hh\:mm\:ss");
+            CreateBanner($"CD DEPLOYMENT SCRIPT COMPLETED IN {formattedTestLength} (HH:mm:ss)");
+            return 0;
+        }
+
+        /// <summary>
+        /// Validate every row of the deployment workbook, then download each application to its controller.<br/>
+        /// No Logix SDK or Echo SDK call is made until all rows have passed validation.
+        /// </summary>
+        /// <param name="githubPath">The file path to the local GitHub folder (repository checkout root).</param>
+        /// <param name="reportAndGeneratedFilesFolderPath">The folder path to which generated files are saved.</param>
+        /// <param name="inputExcelFilePath">The deployment workbook file path.</param>
+        /// <returns>A Task that programmatically downloads ACDs to controllers.</returns>
+        /// <exception cref="DeploymentAbortedException">Thrown if validation fails or a controller is not confirmed in the required mode.</exception>
+        private static async Task DeployAsync(string githubPath, string reportAndGeneratedFilesFolderPath, string inputExcelFilePath)
+        {
+            IReadOnlySet<string> approvedControllers = DeploymentGuard.LoadApprovedControllers(
+                Environment.GetEnvironmentVariable(DeploymentGuard.ApprovedControllersFileVariable), githubPath);
+            List<DeploymentTarget> targets = ReadDeploymentTargets(inputExcelFilePath, githubPath, approvedControllers);
+            ConsoleMessage($"Validated {targets.Count} workbook row(s) against {approvedControllers.Count} approved controller(s).", "STATUS");
             CreateBanner("BEGIN DOWNLOADS");
 
-            int numberOfControllers = GetPopulatedCellsInColumnCount(inputExcelFilePath, 2) - 2;
-            ExcelPackage package = new ExcelPackage(new FileInfo(inputExcelFilePath));
-            ExcelWorksheet worksheet = package.Workbook.Worksheets.FirstOrDefault()!;
-
             // Download ACDs to each controller specified in the input excel workbook.
-            for (int i = 0; i < numberOfControllers; i++)
+            for (int i = 0; i < targets.Count; i++)
             {
-                int rowNumber = i + 7;
-                string applicationFilePath = worksheet.Cells[rowNumber, 2].Value.ToString()!;
-                string plcCommPath = worksheet.Cells[rowNumber, 3].Value.ToString()!;
-                string acdFilePath = githubPath + applicationFilePath;
-                string generatedACD = reportAndGeneratedFilesFolderPath + currentDateTime + "_" + Path.GetFileNameWithoutExtension(acdFilePath) + ".ACD";
+                string plcCommPath = targets[i].ControllerCommPath;
+                string acdFilePath = targets[i].ApplicationFilePath;
+                string generatedACD = Path.Combine(reportAndGeneratedFilesFolderPath,
+                    currentDateTime + "_" + Path.GetFileNameWithoutExtension(acdFilePath) + ".ACD");
 
                 // If the application file is an L5X file type, convert it to an ACD.
                 if ((acdFilePath.EndsWith("L5X", StringComparison.OrdinalIgnoreCase) || acdFilePath.EndsWith("l5x", StringComparison.OrdinalIgnoreCase)) && !File.Exists(generatedACD))
@@ -157,10 +191,9 @@ namespace CD_Deployment
                 // Change controller mode to program & verify.
                 ConsoleMessage($"START changing controller '{plcCommPath}' to PROGRAM mode...", "NEWSECTION");
                 await ChangeControllerMode_Async(plcCommPath, "PROGRAM", logixProject);
-                if (ReadControllerMode_Async(plcCommPath, logixProject).GetAwaiter().GetResult() == "PROGRAM")
-                    ConsoleMessage($"SUCCESS changing controller '{plcCommPath}' to PROGRAM mode.", "STATUS", false);
-                else
-                    ConsoleMessage($"FAILURE changing controller '{plcCommPath}' to PROGRAM mode.", "ERROR", false);
+                if (await ReadControllerMode_Async(plcCommPath, logixProject) != "PROGRAM")
+                    throw new DeploymentAbortedException($"FAILURE changing controller '{plcCommPath}' to PROGRAM mode. Download not attempted.");
+                ConsoleMessage($"SUCCESS changing controller '{plcCommPath}' to PROGRAM mode.", "STATUS", false);
 
                 // Download the specified ACD application to the controller.
                 ConsoleMessage($"START downloading ACD file to '{plcCommPath}'.", "NEWSECTION");
@@ -170,10 +203,9 @@ namespace CD_Deployment
                 // Change controller mode to test & verify.
                 ConsoleMessage($"START changing controller '{plcCommPath}' to RUN mode...", "NEWSECTION");
                 await ChangeControllerMode_Async(plcCommPath, "RUN", logixProject);
-                if (ReadControllerMode_Async(plcCommPath, logixProject).GetAwaiter().GetResult() == "RUN")
-                    ConsoleMessage($"SUCCESS changing controller '{plcCommPath}' to RUN mode.", "STATUS", false);
-                else
-                    ConsoleMessage($"FAILURE changing controller '{plcCommPath}' to RUN mode.", "ERROR", false);
+                if (await ReadControllerMode_Async(plcCommPath, logixProject) != "RUN")
+                    throw new DeploymentAbortedException($"FAILURE changing controller '{plcCommPath}' to RUN mode.");
+                ConsoleMessage($"SUCCESS changing controller '{plcCommPath}' to RUN mode.", "STATUS", false);
 
                 // Based on the static variable deleteEchoChassis, keep or delete the Logix Echo chassis (and its controllers) used to showcase deployment.
                 if (deleteEchoChassis)
@@ -186,15 +218,40 @@ namespace CD_Deployment
                     ConsoleMessage($"Retaining Logix Echo chassis 'GeneratedChassis-{i + 1}' and its controller '{plcCommPath}'.", "NEWSECTION");
                 }
             }
-
-            // Compute how long the test took to run and print final banner.
-            DateTime testEndTime = DateTime.Now;
-            TimeSpan testLength = testEndTime.Subtract(testStartTime);
-            string formattedTestLength = testLength.ToString(@"hh\:mm\:ss");
-            CreateBanner($"CD DEPLOYMENT SCRIPT COMPLETED IN {formattedTestLength} (HH:mm:ss)");
         }
 
         #region METHODS
+        /// <summary>
+        /// Read and validate every controller row of the deployment workbook.
+        /// </summary>
+        /// <param name="excelFilePath">The deployment workbook file path.</param>
+        /// <param name="githubPath">The repository checkout root.</param>
+        /// <param name="approvedControllers">The approved controller communication paths.</param>
+        /// <returns>The validated deployment targets, in workbook order.</returns>
+        /// <exception cref="DeploymentAbortedException">Thrown if the workbook is missing or any row fails validation.</exception>
+        private static List<DeploymentTarget> ReadDeploymentTargets(string excelFilePath, string githubPath, IReadOnlySet<string> approvedControllers)
+        {
+            if (!File.Exists(excelFilePath))
+                throw new DeploymentAbortedException($"Input excel workbook '{excelFilePath}' does not exist.");
+
+            int numberOfControllers = GetPopulatedCellsInColumnCount(excelFilePath, 2) - 2;
+            var targets = new List<DeploymentTarget>();
+            using (ExcelPackage package = new ExcelPackage(new FileInfo(excelFilePath)))
+            {
+                ExcelWorksheet worksheet = package.Workbook.Worksheets.FirstOrDefault()!;
+                for (int i = 0; i < numberOfControllers; i++)
+                {
+                    int rowNumber = i + 7;
+                    targets.Add(DeploymentGuard.ValidateRow(rowNumber, worksheet.Cells[rowNumber, 2].Value, worksheet.Cells[rowNumber, 3].Value,
+                        githubPath, approvedControllers));
+                }
+            }
+
+            if (targets.Count == 0)
+                throw new DeploymentAbortedException($"Input excel workbook '{excelFilePath}' lists no controllers.");
+            return targets;
+        }
+
         /// <summary>
         /// In the first worksheet of an Excel workbook, get the number of populated cells in the specified column.
         /// </summary>

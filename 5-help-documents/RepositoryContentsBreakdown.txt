@@ -25,6 +25,7 @@ ra-logix-cicd
 │       ├───1-cd-jenkinsfile <------------------ Contains the Jenkinsfile used to execute the continuous deployment Jenkins pipeline.
 │       ├───2-cd-deploymentscript <------------- Contains the C# solution used to download full applications to controller using EchoSDK (if demoing) and LDSDK for CD.
 │       │   ├───CD_Deployment
+│       │   ├───CD_Deployment.Tests <----------- Contains xUnit tests for the deployment workbook validation (run with 'dotnet test').
 │       │   ├───ConsoleFormatter_ClassLibrary
 │       │   ├───LogixDesigner_ClassLibrary
 │       │   └───LogixEcho_ClassLibrary
