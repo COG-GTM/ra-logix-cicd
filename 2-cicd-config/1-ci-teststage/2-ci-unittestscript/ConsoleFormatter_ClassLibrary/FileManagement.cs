@@ -22,12 +22,13 @@ namespace ConsoleFormatter_ClassLibrary
         private static StreamWriter? _fileWriter;
 
         /// <summary>
-        /// Starts redirecting the console output to both the console and the file.
+        /// Starts redirecting the console output to both the console and the file.<br/>
+        /// An existing file at the same path is overwritten so a report never contains content from an earlier run.
         /// </summary>
         /// <param name="path">The path to the output file.</param>
         public static void StartLogging(string path)
         {
-            FileStream ostrm = new FileStream(path, FileMode.OpenOrCreate, FileAccess.Write);
+            FileStream ostrm = new FileStream(path, FileMode.Create, FileAccess.Write);
             _fileWriter = new StreamWriter(ostrm) { AutoFlush = true };
             _oldOut = Console.Out;
 
@@ -36,12 +37,16 @@ namespace ConsoleFormatter_ClassLibrary
         }
 
         /// <summary>
-        /// Stops redirecting the console output and restores the original output.
+        /// Stops redirecting the console output and restores the original output. Does nothing if logging is not active.
         /// </summary>
         public static void StopLogging()
         {
+            if (_fileWriter == null)
+                return;
+
             Console.SetOut(_oldOut!);
-            _fileWriter!.Close();
+            _fileWriter.Close();
+            _fileWriter = null;
         }
 
         /// <summary>

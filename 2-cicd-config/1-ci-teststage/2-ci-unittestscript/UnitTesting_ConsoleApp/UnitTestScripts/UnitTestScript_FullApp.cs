@@ -57,8 +57,8 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
         /// <param name="args">
         /// Inputs from UnitTestProgram.
         /// </param>
-        /// <returns>An asyncronous task that executes unit testing on a Studio 5000 Logix Designer application.</returns>
-        public static async Task RunTest(string[] args)
+        /// <returns>True only if at least one test case ran and every test case passed.</returns>
+        public static async Task<bool> RunTest(string[] args)
         {
             #region PARSE VARIABLES & INITIALIZE UNIT TEST
             CreateBanner("UNIT TEST INFO");
@@ -98,7 +98,7 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             string testObjectName = GetAttributeValue(l5xFilePath, "RSLogix5000Content", "TargetName", false)!;
 
             // Print message to console about the selected input excel test information.
-            string outputTextFilePath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.txt";
+            string outputTextFilePath = textFileReportPath;
             string outputExcelFilePath = reportAndGeneratedFilesFolderPath + @"2-excelreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.xlsx";
 
             Console.WriteLine("Unit test target object type:".PadRight(40, ' ') + "Full Application (L5X)");
@@ -138,7 +138,7 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             if (ReadControllerMode_Async(commPath, logixProject).GetAwaiter().GetResult() == "PROGRAM")
                 ConsoleMessage("SUCCESS changing controller to PROGRAM mode.", "STATUS", false);
             else
-                ConsoleMessage("FAILURE changing controller to PROGRAM mode.", "ERROR", false);
+                await AbortStagedTestAsync(logixProject, "FAILURE changing controller to PROGRAM mode.");
 
             // Download programmatically generated ACD application to the emulated controller.
             ConsoleMessage("START downloading ACD file...", "NEWSECTION");
@@ -151,13 +151,20 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             if (ReadControllerMode_Async(commPath, logixProject).GetAwaiter().GetResult() == "TEST")
                 ConsoleMessage("SUCCESS changing controller to TEST mode.", "STATUS", false);
             else
-                ConsoleMessage("FAILURE changing controller to TEST mode.", "ERROR", false);
+                await AbortStagedTestAsync(logixProject, "FAILURE changing controller to TEST mode.");
             #endregion
 
             #region COMMENCE TEST: Set & check parameters for each test case from the excel sheet. Results are committed to output excel worksheet.
             ConsoleMessage($"START {testObjectName} unit testing...", "NEWSECTION");
             int testCases = GetRightmostColumnWithData(inputExcelFilePath, 20) - 6; // The number of test cases provided in the input excel workbook.
             int failureCondition = 0; // This variable tracks the number of failed test cases or controller faults.
+
+            // A workbook without test cases verifies nothing, so it cannot pass.
+            if (testCases < 1)
+            {
+                ConsoleMessage($"No test cases found in row 20 of '{inputExcelFileName}'. At least one test case column is required.", "ERROR");
+                failureCondition++;
+            }
 
             // Get the Name, DataType, Usage, and XPath components of each tag from the L5X file & put those contents into an array.
             S5kAtomicTag[] testTags = GetTagsForTest(inputExcelFilePath, l5xFilePath)!;
@@ -541,9 +548,7 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             // Stop logging the console output to the text file.
             StopLogging();
 
-            // Rename text file to include the target object name.
-            string textFileReportPath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_UnitTestReport.txt";
-            RenameFile(textFileReportPath, currentDateTime + "_" + testObjectName + "_UnitTestReport.txt");
+            return failureCondition == 0;
             #endregion
         }
 
@@ -916,6 +921,32 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
 
             // Rename the file
             File.Move(oldFilePath, newFilePath);
+        }
+
+        /// <summary>
+        /// Best-effort cleanup of the emulated controller and chassis when staging fails, then abort the test so the run fails.
+        /// </summary>
+        /// <param name="logixProject">The open Logix Designer project.</param>
+        /// <param name="reason">Why the test is being aborted.</param>
+        /// <exception cref="InvalidOperationException">Always thrown with the provided reason.</exception>
+        private static async Task AbortStagedTestAsync(LogixProject logixProject, string reason)
+        {
+            ConsoleMessage(reason, "ERROR", false);
+            try
+            {
+                await logixProject.GoOfflineAsync();
+                if (deleteEchoChassis)
+                {
+                    await LogixEchoMethods.DeleteChassis_Async(chassisName);
+                    ConsoleMessage($"Deleted Logix Echo chassis named '{chassisName}'.", "STATUS");
+                }
+            }
+            catch (Exception cleanupError)
+            {
+                ConsoleMessage($"Cleanup after aborted test failed: {cleanupError.Message}", "ERROR", false);
+            }
+
+            throw new InvalidOperationException(reason);
         }
         #endregion
     }
