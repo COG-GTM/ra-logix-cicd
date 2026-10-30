@@ -9,6 +9,7 @@
 // ------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 using System.Text;
+using System.Text.RegularExpressions;
 using static ConsoleFormatter_ClassLibrary.ConsoleFormatter;
 
 namespace ConsoleFormatter_ClassLibrary
@@ -89,8 +90,13 @@ namespace ConsoleFormatter_ClassLibrary
         /// </summary>
         /// <param name="oldFilePath">A string containing the full file path of the file to be renamed.</param>
         /// <param name="newFileName">A string containing the new name of the file.</param>
+        /// <exception cref="ArgumentException">Thrown if the new file name contains a directory component.</exception>
         public static void RenameFile(string oldFilePath, string newFileName)
         {
+            if (string.IsNullOrWhiteSpace(newFileName) || newFileName.IndexOfAny(['\\', '/']) >= 0 || Path.GetFileName(newFileName) != newFileName
+                || newFileName is "." or "..")
+                throw new ArgumentException($"New file name '{newFileName}' must not contain a directory component.", nameof(newFileName));
+
             // Get the directory of the old file
             string directory = Path.GetDirectoryName(oldFilePath)!;
 
@@ -99,6 +105,48 @@ namespace ConsoleFormatter_ClassLibrary
 
             // Rename the file
             File.Move(oldFilePath, newFilePath);
+        }
+
+        /// <summary>
+        /// Resolve a path read from an input excel workbook against a root folder and ensure the result stays inside that root folder.<br/>
+        /// Both '\' and '/' are treated as directory separators.
+        /// </summary>
+        /// <param name="rootFolderPath">The folder the resolved path must stay within (for example, the local GitHub folder path).</param>
+        /// <param name="relativePath">The path relative to the root folder.</param>
+        /// <returns>The full path of the resolved file.</returns>
+        /// <exception cref="InvalidDataException">Thrown if the path is empty, rooted, or resolves outside the root folder.</exception>
+        public static string ResolvePathWithinFolder(string rootFolderPath, string relativePath)
+        {
+            string normalizedRelativePath = relativePath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+            if (string.IsNullOrWhiteSpace(normalizedRelativePath) || Path.IsPathRooted(normalizedRelativePath))
+                throw new InvalidDataException($"Path '{relativePath}' must be a non-empty path relative to '{rootFolderPath}'.");
+
+            string fullRootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootFolderPath)) + Path.DirectorySeparatorChar;
+            string fullPath = Path.GetFullPath(Path.Combine(fullRootPath, normalizedRelativePath));
+            StringComparison comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            if (fullPath.Length <= fullRootPath.Length || !fullPath.StartsWith(fullRootPath, comparison))
+                throw new InvalidDataException($"Path '{relativePath}' resolves to '{fullPath}', which is outside '{fullRootPath}'.");
+
+            return fullPath;
+        }
+
+        // Studio 5000 Logix Designer component names: a letter or underscore, then letters, digits, or underscores (40 characters max).
+        private static readonly Regex logixComponentNameRegex = new(@"^[A-Za-z_][A-Za-z0-9_]{0,39}$", RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// Validate that a name read from an L5X file is a valid Studio 5000 Logix Designer component name, so it is safe to use in file names.
+        /// </summary>
+        /// <param name="name">The name to validate (for example, the RSLogix5000Content TargetName attribute).</param>
+        /// <param name="description">Where the name came from, used in the error message.</param>
+        /// <returns>The validated name.</returns>
+        /// <exception cref="InvalidDataException">Thrown if the name is not a valid Logix component name.</exception>
+        public static string ValidateLogixComponentName(string? name, string description)
+        {
+            if (name == null || !logixComponentNameRegex.IsMatch(name))
+                throw new InvalidDataException($"{description} '{name}' is not a valid Logix component name (letters, digits, and underscores only, " +
+                    "starting with a letter or underscore, 40 characters max).");
+
+            return name;
         }
 
         /// <summary>

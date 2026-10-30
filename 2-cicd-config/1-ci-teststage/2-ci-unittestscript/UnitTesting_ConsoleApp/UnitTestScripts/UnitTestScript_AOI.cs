@@ -102,7 +102,7 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             {
                 ExcelWorksheet inputExcelWorksheet = package.Workbook.Worksheets.FirstOrDefault()!;
                 iExcel_testObjectType = inputExcelWorksheet.Cells[9, 2].Value.ToString()!.Trim()!.ToUpper()!;
-                iExcel_testObjectFilePath = githubPath + inputExcelWorksheet.Cells[9, 3].Value.ToString()!.Trim()!;
+                iExcel_testObjectFilePath = inputExcelWorksheet.Cells[9, 3].Value.ToString()!.Trim()!;
             }
 
             // Check if the test object file path starts and ends with quotation marks. If so, remove them.
@@ -119,7 +119,19 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             LogixProject logixProject;
 
             // Get variables needed to set up unit test. Information retreived from the L5X or ACD file specified in the input excel sheet.
-            testObjectName = GetAttributeValue(iExcel_testObjectFilePath, "AddOnInstructionDefinition", "Name", false)!;
+            // Keep the test object file inside the GitHub folder and the test object name safe to use in generated file names.
+            try
+            {
+                iExcel_testObjectFilePath = ResolvePathWithinFolder(githubPath, iExcel_testObjectFilePath);
+                testObjectName = ValidateLogixComponentName(GetAttributeValue(iExcel_testObjectFilePath, "AddOnInstructionDefinition", "Name", false), "AOI definition Name");
+            }
+            catch (InvalidDataException ex)
+            {
+                ConsoleMessage(ex.Message, "ERROR");
+                CreateBanner("UNIT TEST FINAL RESULT: FAIL");
+                StopLogging();
+                return;
+            }
             string softwareRevision = GetAttributeValue(iExcel_testObjectFilePath, "RSLogix5000Content", "SoftwareRevision", false)!;
 
             // Print message to console about the selected input excel test information.
