@@ -22,10 +22,6 @@ pipeline {
         GITHUB_DEV_BRANCH = 'develop/datatype-bounds'
         GITHUB_RELEASE_BRANCH = 'release/v1.0.0'
         FINAL_TEST_RESULT = "PASS"
-        GITHUB_USER_EMAIL = powershell(script: "git log -1 --pretty=format:'%ae'", returnStdout: true).trim()
-        GITHUB_USER_NAME = powershell(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
-        GITHUB_COMMIT_HASH = powershell(script: "git log -1 --pretty=format:'%H'", returnStdout: true).trim()
-        GITHUB_COMMIT_MSG = powershell(script: "git log -1 --pretty=format:'%s'", returnStdout: true).trim()
     }
 
     stages {
@@ -36,6 +32,14 @@ pipeline {
             steps {
                 createBanner('STAGE: Test')
                 script {
+                    // Commit metadata and workbook names are controlled by whoever pushes to the polled branch. They are validated or sanitized
+                    // here and only reach cmd.exe through environment variables expanded with delayed expansion (!VAR!), which cmd.exe does not
+                    // re-parse for &, |, <, >, ^ or %. Never interpolate them into a bat/powershell script string.
+                    env.GITHUB_COMMIT_HASH = requireCiValue('commit hash', readCommitField('%H'), /^[0-9a-f]{40,64}$/)
+                    env.GITHUB_USER_EMAIL = requireCiValue('commit author email', readCommitField('%ae'), /^[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+$/)
+                    env.GITHUB_USER_NAME = sanitizeCommitText(readCommitField('%an'))
+                    env.GITHUB_COMMIT_MSG = sanitizeCommitText(readCommitField('%s'))
+
                     def inputExcelWorkbooksFolderPath = "${env.PATH_JENKINS_GITHUB}2-cicd-config\\1-ci-teststage\\3-ci-inputexcelworkbooks"
                     def executable_filePath = "${env.PATH_JENKINS_GITHUB}2-cicd-config\\1-ci-teststage\\2-ci-unittestscript\\UnitTesting_ConsoleApp\\bin\\" +
                         "Release\\net8.0\\UnitTesting_ConsoleApp.exe"
@@ -44,12 +48,20 @@ pipeline {
                     def excelFileNames = powershell(
                         script: "Get-ChildItem -Path ${inputExcelWorkbooksFolderPath} -Filter *.xlsx | Select-Object -ExpandProperty Name",
                         returnStdout: true
-                    ).trim().split('\n')
+                    ).trim().split('\n').collect { it.trim() }.findAll { it }
+
+                    // Reject the whole build before any test runs if a workbook file name is not on the allowlist.
+                    for (fileName in excelFileNames) {
+                        requireCiValue('workbook file name', fileName, /^[A-Za-z0-9_.-]+\.xlsx$/)
+                    }
 
                     // Loop through each excel workbook file name and execute the test script for each workbook. 
                     excelFileNames.each { fileName ->
-                        bat(script: "@${executable_filePath} ${env.PATH_JENKINS_GITHUB} ${fileName.trim()} \"${env.GITHUB_USER_NAME}\" ${env.GITHUB_USER_EMAIL} " +
-                            "\"${env.GITHUB_COMMIT_MSG}\" ${env.GITHUB_COMMIT_HASH} ${env.JOB_NAME} ${env.BUILD_NUMBER} ${env.PATH_GEN_FILES_AND_REPORTS}")
+                        withEnv(["CI_TEST_EXE=${executable_filePath}", "CI_WORKBOOK=${fileName}"]) {
+                            bat(script: '''@setlocal EnableDelayedExpansion
+@"!CI_TEST_EXE!" !PATH_JENKINS_GITHUB! "!CI_WORKBOOK!" "!GITHUB_USER_NAME!" "!GITHUB_USER_EMAIL!" "!GITHUB_COMMIT_MSG!" !GITHUB_COMMIT_HASH! "!JOB_NAME!" !BUILD_NUMBER! !PATH_GEN_FILES_AND_REPORTS!
+''')
+                        }
 
                         // Get the phrase "PASS" or "FAIL" from the final banner displayed in the text report.
                         testFinalResult = trimFinalTextReportBanner("${env.PATH_GEN_FILES_AND_REPORTS}1-textreports")
@@ -76,42 +88,46 @@ pipeline {
                             "pr-${env.BUILD_NUMBER} into ${env.GITHUB_RELEASE_BRANCH}. The release/pending-pr-${env.BUILD_NUMBER} branch can be safely deleted" + 
                             " once merged."
 
-                        bat """
-                            setlocal
+                        // Commit metadata reaches cmd.exe only through environment variables expanded with delayed expansion (!VAR!).
+                        withEnv(["CI_PR_TITLE=${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: ${env.BUILD_NUMBER}",
+                                 "CI_PR_BODY=${pr_messagecontents}",
+                                 "CI_PENDING_BRANCH=release/pending-pr-${env.BUILD_NUMBER}"]) {
+                            bat '''
+                                setlocal EnableDelayedExpansion
 
-                            :: Set the local user info for the Jenkins job agent to the commiter's info.
-                            cd ${env.PATH_JENKINS_GITHUB}
-                            git config --global --replace-all user.email ${env.GITHUB_USER_EMAIL}
-                            git config --global --replace-all user.name ${env.GITHUB_USER_NAME}
+                                :: Set the local user info for the Jenkins job agent to the commiter's info.
+                                cd !PATH_JENKINS_GITHUB!
+                                git config --global --replace-all user.email "!GITHUB_USER_EMAIL!"
+                                git config --global --replace-all user.name "!GITHUB_USER_NAME!"
 
-                            :: Fetch all branches 
-                            git fetch --all 
+                                :: Fetch all branches 
+                                git fetch --all 
 
-                            :: Check if the release/pending-pr-${env.BUILD_NUMBER} branch exists
-                            git show-ref --verify --quiet refs/heads/release/pending-pr-${env.BUILD_NUMBER}
-                            if %errorlevel% neq 0 ( 
-                                echo Branch 'release/pending-pr-${env.BUILD_NUMBER}' does not exist. Creating it. 
-                                git checkout -b release/pending-pr-${env.BUILD_NUMBER}
-                            ) else ( 
-                                echo Branch 'release/pending-pr-${env.BUILD_NUMBER}' exists. Checking it out. 
-                                git checkout release/pending-pr-${env.BUILD_NUMBER} 
-                                git merge origin/${env.GITHUB_DEV_BRANCH}
-                            ) 
-                            
-                            :: Push changes to the remote repository 
-                            git push origin release/pending-pr-${env.BUILD_NUMBER}
+                                :: Check if the pending release branch exists
+                                git show-ref --verify --quiet "refs/heads/!CI_PENDING_BRANCH!"
+                                if %errorlevel% neq 0 ( 
+                                    echo Branch '!CI_PENDING_BRANCH!' does not exist. Creating it. 
+                                    git checkout -b "!CI_PENDING_BRANCH!"
+                                ) else ( 
+                                    echo Branch '!CI_PENDING_BRANCH!' exists. Checking it out. 
+                                    git checkout "!CI_PENDING_BRANCH!"
+                                    git merge "origin/!GITHUB_DEV_BRANCH!"
+                                ) 
+                                
+                                :: Push changes to the remote repository 
+                                git push origin "!CI_PENDING_BRANCH!"
 
-                            git add .
-                            git commit -m \"${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: ${env.BUILD_NUMBER}\"
-                            git push --set-upstream origin release/pending-pr-${env.BUILD_NUMBER}
+                                git add .
+                                git commit -m "!CI_PR_TITLE!"
+                                git push --set-upstream origin "!CI_PENDING_BRANCH!"
 
-                            endlocal
-                            """
+                                endlocal
+                                '''
 
-                            def prCommand = 'gh pr create --title "' + "${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: " + 
-                                            "${env.BUILD_NUMBER}\" " + '--body "' + "${pr_messagecontents}\" " + '--base ' + "${env.GITHUB_RELEASE_BRANCH} " + 
-                                            '--head ' + "release/pending-pr-${env.BUILD_NUMBER}" 
-                            bat prCommand
+                            bat '''@setlocal EnableDelayedExpansion
+@gh pr create --title "!CI_PR_TITLE!" --body "!CI_PR_BODY!" --base "!GITHUB_RELEASE_BRANCH!" --head "!CI_PENDING_BRANCH!"
+'''
+                        }
                     }
                     if (FINAL_TEST_RESULT == 'FAIL') {
                         echo "CI Testing FAILURE: ${env.GITHUB_USER_NAME} contributions from commit hash ${env.GIT_COMMIT} did not pass CI testing. Check the " +
@@ -139,6 +155,24 @@ def createBanner(bannerName) {
         def finalBanner = '-=[' + bannerName + ']=-'
         echo finalBanner.padRight(160, '-')
     }
+}
+
+// Function to read one field of the HEAD commit. The format is always a constant placeholder such as '%ae', never user input.
+def readCommitField(format) {
+    return powershell(script: "git log -1 --pretty=format:'${format}'", returnStdout: true).trim()
+}
+
+// Function to stop the pipeline when a value that is passed to a command line does not match its allowlist pattern.
+def requireCiValue(label, value, pattern) {
+    if (!(value ==~ pattern)) {
+        error("Rejected ${label}: it must match ${pattern}. Rename or amend it and commit again.")
+    }
+    return value
+}
+
+// Function to remove quotes, cmd.exe metacharacters and control characters from free-text commit metadata (author name, subject line).
+def sanitizeCommitText(value) {
+    return value.replaceAll(/[\p{Cntrl}"%!^&|<>]/, ' ').replaceAll(/ {2,}/, ' ').trim()
 }
 
 // Function to get just the final result, PASS or FAIL, of a generated text file report.
