@@ -173,8 +173,7 @@ namespace CD_Deployment
                         ConsoleMessage($"START creating emulated controller for '{plcCommPath}' in chassis 'GeneratedChassis-{i + 1}'.", "NEWSECTION");
 
                     string justIP = plcCommPath.Substring(EchoCommPathPrefix.Length);
-                    await LogixEchoMethods.CreateChassisFromACD_Async(acdFilePath, justIP, $"GeneratedChassis-{i + 1}");
-                    chassisCreated = true;
+                    chassisCreated = await LogixEchoMethods.CreateChassisFromACD_Async(acdFilePath, justIP, $"GeneratedChassis-{i + 1}");
                     ConsoleMessage($"Done creating emulated controller for '{plcCommPath}' in chassis 'GeneratedChassis-{i + 1}'.", "STATUS");
                     ConsoleMessage($"Note that in a typical CI/CD system, the input excel workbook would not contain any emulated controller communication " +
                         $"paths that need to be emulated. Emulated file paths are included only for demo purposes.", "STATUS");
