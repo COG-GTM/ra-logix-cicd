@@ -49,6 +49,9 @@ pipeline {
                         script: "Get-ChildItem -Path ${inputExcelWorkbooksFolderPath} -Filter *.xlsx | Select-Object -ExpandProperty Name",
                         returnStdout: true
                     ).trim().split('\n').collect { it.trim() }.findAll { it }
+                    if (excelFileNames.isEmpty()) {
+                        error("No .xlsx workbooks found in ${inputExcelWorkbooksFolderPath}; refusing to release untested changes.")
+                    }
 
                     // Reject the whole build before any test runs if a workbook file name is not on the allowlist.
                     for (fileName in excelFileNames) {
@@ -171,8 +174,9 @@ def requireCiValue(label, value, pattern) {
 }
 
 // Function to remove quotes, cmd.exe metacharacters and control characters from free-text commit metadata (author name, subject line).
+// Trailing backslashes are also removed because they would escape the closing quote of a quoted Windows command-line argument.
 def sanitizeCommitText(value) {
-    return value.replaceAll(/[\p{Cntrl}"%!^&|<>]/, ' ').replaceAll(/ {2,}/, ' ').trim()
+    return value.replaceAll(/[\p{Cntrl}"%!^&|<>]/, ' ').replaceAll(/ {2,}/, ' ').trim().replaceAll(/\\+$/, '').trim()
 }
 
 // Function to get just the final result, PASS or FAIL, of a generated text file report.
