@@ -25,6 +25,7 @@ pipeline {
         // DEPLOY STAGE: This stage runs the CD_Deployment C# solution created using the EchoSDK & LDSDK. The script downloads the verified ACDs to
         //               controllers specified within the input excel workbook stored in the GitHub repository at the file path below.
         //               (.\2-cicd-config\2-cd-deploystage\3-cd-inputexcelworkbooks\DeployToControllersWorkbook.xlsx)
+        //               Requires the Jenkins "Secret file" credential 'cd-approved-controllers': one approved controller communication path per line.
         stage('Deploy') {
             steps {
                 script {
@@ -33,9 +34,13 @@ pipeline {
                     def executable_filePath = "${env.PATH_JENKINS_GITHUB}2-cicd-config\\2-cd-deploystage\\2-cd-deploymentscript\\CD_Deployment\\bin\\Release\\" +
                         "net8.0\\CD_Deployment.exe"
                     
-                    bat(
-                        script: "@${executable_filePath} ${env.PATH_JENKINS_GITHUB} ${env.PATH_GEN_FILES}"
-                    )
+                    // The approved controller list lives in Jenkins (Secret file credential), not in this repository, so a commit cannot add
+                    // deployment targets. CD_Deployment.exe refuses any workbook row whose controller communication path is not in this file.
+                    withCredentials([file(credentialsId: 'cd-approved-controllers', variable: 'CD_APPROVED_CONTROLLERS_FILE')]) {
+                        bat(
+                            script: "@${executable_filePath} ${env.PATH_JENKINS_GITHUB} ${env.PATH_GEN_FILES}"
+                        )
+                    }
                 }
             }
         }

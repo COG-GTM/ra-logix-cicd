@@ -52,6 +52,12 @@ Step 15: Navigate to your web broswer and open up your remote GitHub repository.
          modifications until ready to continue.
 Step 16: Navigate to your web broswer and open up your remote GitHub repository. Click the 'Pull requests' tab at the top of the screen, and click 
          'New pull request'. Merge the release/v1.0.0 into the main branch to trigger the RA-EXAMPLE-CD pipeline.
+         Before the first deployment, a Jenkins administrator must create a "Secret file" credential with the ID 'cd-approved-controllers'
+         (Manage Jenkins > Credentials). The file lists the controller communication paths the pipeline may download to, one per line
+         ('#' starts a comment), e.g. 'EmulateEthernet\127.0.0.1' for the demo emulated controllers. The list is kept out of the repository
+         on purpose: CD_Deployment.exe stops before contacting any controller if the variable is missing, the file is inside the checkout,
+         a workbook row names a controller that is not listed, or a workbook file path is outside '1-production-files\'. It also stops if
+         a controller is not confirmed in PROGRAM mode before downloading.
 Step 17: Navigate back to Jenkins and open the RA-EXAMPLE-CD pipeline. For its first execution, you may need to manually run the Jenkins pipeline; if the 
          RA-EXAMPLE-CD pipeline hadn't started yet, click 'Build Now'. Note the various stages of the Jenkins pipeline and the console outputs from the test 
          scripts. (If running into issues here, navigate to the troubleshooting section below.)

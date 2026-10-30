@@ -27,12 +27,13 @@ namespace LogixEcho_ClassLibrary
         /// <param name="acdFilePath">The file path pointing to the ACD project used for testing.</param>
         /// <param name="commPath">The controller communication path.</param>
         /// z<param name="chassisName">Specify the name of the chassis to be created (default name is "DefaultChassis" if no input provided).</param>
-        /// <returns>A string containing the communication path of the emulated controller that the ACD file will go online with during testing.</returns>
-        public static async Task CreateChassisFromACD_Async(string acdFilePath, string commPath, string chassisName = "DefaultChassis")
+        /// <returns>True if this call created the chassis; false if a chassis with that name already existed.</returns>
+        public static async Task<bool> CreateChassisFromACD_Async(string acdFilePath, string commPath, string chassisName = "DefaultChassis")
         {
             var serviceClient = ClientFactory.GetServiceApiClientV2("CLIENT_TestStage_CICDExample"); // Factory Talk Logix Echo SDK service client.
             serviceClient.Culture = new CultureInfo("en-US");                                        // Client language set to english.
             ChassisData? chassisData = new ChassisData();
+            bool createdChassis = false;
 
             // Set up new emulated chassis if none exists.
             if (CheckCurrentChassis_Async(chassisName, serviceClient).GetAwaiter().GetResult() == false)
@@ -44,6 +45,7 @@ namespace LogixEcho_ClassLibrary
                 };
 
                 chassisData = await serviceClient.CreateChassis(chassisUpdate);
+                createdChassis = true;
             }
             else // Get emulated chassis data if it already exists.
             {
@@ -63,6 +65,8 @@ namespace LogixEcho_ClassLibrary
                 controllerUpdate.IPConfigurationData.Address = System.Net.IPAddress.Parse(commPath);
                 await serviceClient.CreateController(controllerUpdate);
             }
+
+            return createdChassis;
         }
 
         /// <summary>

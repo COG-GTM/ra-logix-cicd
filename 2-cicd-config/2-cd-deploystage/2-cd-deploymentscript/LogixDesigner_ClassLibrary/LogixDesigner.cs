@@ -116,11 +116,14 @@ namespace LogixDesigner_ClassLibrary
         }
 
         /// <summary>
-        /// Asynchronously download to the specified controller.
+        /// Asynchronously download to the specified controller.<br/>
+        /// The caller is responsible for confirming that commPath is an approved deployment target.
         /// </summary>
         /// <param name="commPath">The controller communication path.</param>
         /// <param name="project">An instance of the LogixProject class.</param>
         /// <returns>An Task that downloads to the specified controller.</returns>
+        /// <exception cref="InvalidOperationException">Thrown if the communication path cannot be set, the controller is not confirmed to be in
+        /// 'Program' mode, or the download fails. No download is attempted in the first two cases.</exception>
         public static async Task DownloadProject_Async(string commPath, LogixProject project)
         {
             try
@@ -131,20 +134,24 @@ namespace LogixDesigner_ClassLibrary
             {
                 ConsoleMessage($"Unable to set communication path to '{commPath}'.", "ERROR");
                 Console.WriteLine(e.Message);
+                throw new InvalidOperationException($"Unable to set communication path to '{commPath}'. Download not attempted.", e);
             }
 
+            LogixProject.ControllerMode controllerMode;
             try
             {
-                LogixProject.ControllerMode controllerMode = await project.ReadControllerModeAsync();
-                if (controllerMode != LogixProject.ControllerMode.Program)
-                {
-                    ConsoleMessage($"Controller mode is {controllerMode}. Downloading is possible only if the controller is in 'Program' mode.", "ERROR");
-                }
+                controllerMode = await project.ReadControllerModeAsync();
             }
             catch (LogixSdkException e)
             {
                 ConsoleMessage("Unable to read ControllerMode.", "ERROR");
                 Console.WriteLine(e.Message);
+                throw new InvalidOperationException($"Unable to read the mode of controller '{commPath}'. Download not attempted.", e);
+            }
+            if (controllerMode != LogixProject.ControllerMode.Program)
+            {
+                ConsoleMessage($"Controller mode is {controllerMode}. Downloading is possible only if the controller is in 'Program' mode.", "ERROR");
+                throw new InvalidOperationException($"Controller '{commPath}' is in {controllerMode} mode, not 'Program' mode. Download not attempted.");
             }
 
             try
@@ -155,6 +162,7 @@ namespace LogixDesigner_ClassLibrary
             {
                 ConsoleMessage("Unable to download.", "ERROR");
                 Console.WriteLine(e.Message);
+                throw new InvalidOperationException($"Unable to download to controller '{commPath}'.", e);
             }
 
             // Download modifies the project.

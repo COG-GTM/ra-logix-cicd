@@ -11,6 +11,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LogixDesigner_ClassLibrary"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LogixEcho_ClassLibrary", "LogixEcho_ClassLibrary\LogixEcho_ClassLibrary.csproj", "{84A2FA97-73B2-437A-986E-0317FE4E30FD}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CD_Deployment.Tests", "CD_Deployment.Tests\CD_Deployment.Tests.csproj", "{5D2C8E41-7B3A-4F96-9C1E-2A6B8D0F4E73}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -33,6 +35,10 @@ Global
 		{84A2FA97-73B2-437A-986E-0317FE4E30FD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{84A2FA97-73B2-437A-986E-0317FE4E30FD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{84A2FA97-73B2-437A-986E-0317FE4E30FD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5D2C8E41-7B3A-4F96-9C1E-2A6B8D0F4E73}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5D2C8E41-7B3A-4F96-9C1E-2A6B8D0F4E73}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5D2C8E41-7B3A-4F96-9C1E-2A6B8D0F4E73}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5D2C8E41-7B3A-4F96-9C1E-2A6B8D0F4E73}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
