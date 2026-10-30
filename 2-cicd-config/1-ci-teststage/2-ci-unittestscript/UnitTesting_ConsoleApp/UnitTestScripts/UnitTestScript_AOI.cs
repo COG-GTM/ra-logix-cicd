@@ -20,6 +20,7 @@ using System.Text;
 using System.Xml.Linq;
 using static ConsoleFormatter_ClassLibrary.ConsoleFormatter;
 using static ConsoleFormatter_ClassLibrary.FileManagement;
+using static ConsoleFormatter_ClassLibrary.PathSafety;
 using static LogixDesigner_ClassLibrary.LogixDesigner;
 using static RockwellAutomation.LogixDesigner.LogixProject;
 using static UnitTesting_ConsoleApp.StartUnitTest;
@@ -95,19 +96,23 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
 
             // Variables containing information about the AOI file to test.
             string iExcel_testObjectType;
-            string iExcel_testObjectFilePath;
+            string iExcel_testObjectRelativePath;
 
             // Populate the above variables from the input excel file.
             using (ExcelPackage package = new ExcelPackage(new FileInfo(inputExcelFilePath)))
             {
                 ExcelWorksheet inputExcelWorksheet = package.Workbook.Worksheets.FirstOrDefault()!;
                 iExcel_testObjectType = inputExcelWorksheet.Cells[9, 2].Value.ToString()!.Trim()!.ToUpper()!;
-                iExcel_testObjectFilePath = githubPath + inputExcelWorksheet.Cells[9, 3].Value.ToString()!.Trim()!;
+                iExcel_testObjectRelativePath = inputExcelWorksheet.Cells[9, 3].Value.ToString()!.Trim()!;
             }
 
             // Check if the test object file path starts and ends with quotation marks. If so, remove them.
-            if (iExcel_testObjectFilePath.StartsWith('"') && iExcel_testObjectFilePath.EndsWith('"'))
-                iExcel_testObjectFilePath = iExcel_testObjectFilePath[1..^1];
+            if (iExcel_testObjectRelativePath.Length >= 2 && iExcel_testObjectRelativePath.StartsWith('"') && iExcel_testObjectRelativePath.EndsWith('"'))
+                iExcel_testObjectRelativePath = iExcel_testObjectRelativePath[1..^1];
+
+            // The test object file must be inside the local GitHub folder.
+            string iExcel_testObjectFilePath = ResolvePathWithinFolder(githubPath, iExcel_testObjectRelativePath,
+                "Input excel workbook cell C9 (test object file path)");
             #endregion
 
             #region STAGING TEST: create ACD file -> create emulated controller & chassis -> import L5Xs -> download to ACD -> put controller in test 
@@ -119,12 +124,15 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             LogixProject logixProject;
 
             // Get variables needed to set up unit test. Information retreived from the L5X or ACD file specified in the input excel sheet.
-            testObjectName = GetAttributeValue(iExcel_testObjectFilePath, "AddOnInstructionDefinition", "Name", false)!;
+            testObjectName = ValidateLogixName(GetAttributeValue(iExcel_testObjectFilePath, "AddOnInstructionDefinition", "Name", false),
+                "AddOnInstructionDefinition Name attribute");
             string softwareRevision = GetAttributeValue(iExcel_testObjectFilePath, "RSLogix5000Content", "SoftwareRevision", false)!;
 
             // Print message to console about the selected input excel test information.
-            string outputTextFilePath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.txt";
-            string outputExcelFilePath = reportAndGeneratedFilesFolderPath + @"2-excelreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.xlsx";
+            string outputTextFilePath = EnsurePathWithinFolder(reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_" + testObjectName +
+                "_UnitTestReport.txt", reportAndGeneratedFilesFolderPath + @"1-textreports\", "Output text report path");
+            string outputExcelFilePath = EnsurePathWithinFolder(reportAndGeneratedFilesFolderPath + @"2-excelreports\" + currentDateTime + "_" + testObjectName +
+                "_UnitTestReport.xlsx", reportAndGeneratedFilesFolderPath + @"2-excelreports\", "Output excel report path");
 
             Console.WriteLine("Unit test target object type:".PadRight(40, ' ') + "AOI Definition (L5X)");
             Console.WriteLine("Input excel workbook file path:".PadRight(40, ' ') + WrapText(inputExcelFilePath, 40, consoleCharLengthLimit));
@@ -147,11 +155,13 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             string l5xFileContents = L5XFiles.GetFaultHandlingApplicationL5XContents_ForRoutine(routineName_Cont, routineName_Event, programName_Cont,
                 programName_Event, taskName_Cont, taskName_Event, routineName_FaultHandler, programName_FaultHandler,
                 controllerName, processorType, softwareRevision);                                              // Step 1: Get L5X contents.
-            partialL5XprojectFilePath = generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_Basic.L5X";
+            partialL5XprojectFilePath = EnsurePathWithinFolder(generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_Basic.L5X",
+                generatedFilesFolderPath, "Generated L5X file path");
             File.WriteAllText(partialL5XprojectFilePath, l5xFileContents);                                     // Step 2: Generate new L5X file.
             LogixProject logixProjectL5X = await OpenLogixProjectAsync(partialL5XprojectFilePath);             // Step 3: Open L5X file.
             ConsoleMessage($"L5X application file created & opened at '{partialL5XprojectFilePath}'.", "STATUS");
-            acdFilePath = generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_WithAOI.ACD";
+            acdFilePath = EnsurePathWithinFolder(generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_WithAOI.ACD",
+                generatedFilesFolderPath, "Generated ACD file path");
             await logixProjectL5X.SaveAsAsync(acdFilePath, true);                                              // Step 4: Convert L5X to ACD.
             logixProject = await OpenLogixProjectAsync(acdFilePath);                                           // Step 5: Open ACD file.
             ConsoleMessage($"ACD application file created & opened at '{acdFilePath}'.", "STATUS");
@@ -207,7 +217,8 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             else
                 ConsoleMessage("FAILURE changing controller to TEST mode.", "ERROR", false);
 
-            string fullL5XprojectFilePath = generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_FullProj.L5X";
+            string fullL5XprojectFilePath = EnsurePathWithinFolder(generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_FullProj.L5X",
+                generatedFilesFolderPath, "Generated full project L5X file path");
             await logixProject.SaveAsAsync(fullL5XprojectFilePath, true);
             #endregion
 
@@ -2234,14 +2245,15 @@ This a programmatically created rung with a populated instance of the AOI instru
             if (!File.Exists(sourceFilePath))
                 ConsoleMessage($"Source file '{sourceFilePath}' does not exist.", "ERROR");
 
-            string targetObjectName = GetAttributeValue(sourceFilePath, "AddOnInstructionDefinition", "Name", printOut)!;
+            string targetObjectName = ValidateLogixName(GetAttributeValue(sourceFilePath, "AddOnInstructionDefinition", "Name", printOut),
+                "AddOnInstructionDefinition Name attribute");
 
             // Get the directory and file name from the source file path.
             string extension = Path.GetExtension(sourceFilePath);
 
             // Construct the new file path for the copied file.
             string newFileName = $"{currentDateTime}_{targetObjectName}_AOIRoutine{extension}";
-            string newFilePath = Path.Combine(outputFolderPath, newFileName);
+            string newFilePath = EnsurePathWithinFolder(Path.Combine(outputFolderPath, newFileName), outputFolderPath, "Copied AOI routine file path");
 
             File.Copy(sourceFilePath, newFilePath, overwrite: true);
 

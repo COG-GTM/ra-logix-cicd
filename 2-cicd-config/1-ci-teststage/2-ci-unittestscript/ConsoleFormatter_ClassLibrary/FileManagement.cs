@@ -10,6 +10,7 @@
 
 using System.Text;
 using static ConsoleFormatter_ClassLibrary.ConsoleFormatter;
+using static ConsoleFormatter_ClassLibrary.PathSafety;
 
 namespace ConsoleFormatter_ClassLibrary
 {
@@ -94,8 +95,8 @@ namespace ConsoleFormatter_ClassLibrary
             // Get the directory of the old file
             string directory = Path.GetDirectoryName(oldFilePath)!;
 
-            // Combine the directory, new file name, and extension to form the new file path
-            string newFilePath = Path.Combine(directory, newFileName);
+            // Combine the directory and new file name to form the new file path. The new name must not leave the directory.
+            string newFilePath = EnsurePathWithinFolder(Path.Combine(directory, ValidateFileName(newFileName)), directory, "Renamed file path");
 
             // Rename the file
             File.Move(oldFilePath, newFilePath);
