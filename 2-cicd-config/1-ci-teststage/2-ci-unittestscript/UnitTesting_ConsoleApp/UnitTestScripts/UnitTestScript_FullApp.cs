@@ -14,7 +14,9 @@ using LogixEcho_ClassLibrary;
 using OfficeOpenXml;
 using RockwellAutomation.LogixDesigner;
 using RockwellAutomation.LogixDesigner.Logging;
+using System.Diagnostics.CodeAnalysis;
 using System.Drawing;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using static ConsoleFormatter_ClassLibrary.ConsoleFormatter;
 using static ConsoleFormatter_ClassLibrary.FileManagement;
@@ -37,6 +39,7 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
                                                                                                its controllers) at the end of testing. */
         public static readonly bool iExcel_keepACDs = true; /* ------------------------------- Choose whether to keep or delete generated ACD file used during
                                                                                                test execution. */
+        private static readonly Regex logixIdentifierRegex = new Regex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
 
         /// <summary>
         /// This unit test example has the following steps.<br/>
@@ -75,31 +78,50 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
 
             // Variables containing information about the L5X file to test.
             string iExcel_testObjectType;
-            string iExcel_testObjectFilePath;
+            string iExcel_testObjectRelativePath;
 
             // Populate the above variables from the input excel file.
             using (ExcelPackage package = new ExcelPackage(new FileInfo(inputExcelFilePath)))
             {
                 ExcelWorksheet inputExcelWorksheet = package.Workbook.Worksheets.FirstOrDefault()!;
                 iExcel_testObjectType = inputExcelWorksheet.Cells[9, 2].Value.ToString()!.Trim()!.ToUpper()!;
-                iExcel_testObjectFilePath = githubPath + inputExcelWorksheet.Cells[9, 3].Value.ToString()!.Trim()!;
+                iExcel_testObjectRelativePath = inputExcelWorksheet.Cells[9, 3].Value.ToString()!.Trim()!;
             }
 
             // Check if the test object file path starts and ends with quotation marks. If so, remove them.
-            if (iExcel_testObjectFilePath.StartsWith('"') && iExcel_testObjectFilePath.EndsWith('"'))
-                iExcel_testObjectFilePath = iExcel_testObjectFilePath[1..^1];
+            if (iExcel_testObjectRelativePath.Length >= 2 && iExcel_testObjectRelativePath.StartsWith('"') && iExcel_testObjectRelativePath.EndsWith('"'))
+                iExcel_testObjectRelativePath = iExcel_testObjectRelativePath[1..^1];
+
+            // The test object must live inside the checked-out repository.
+            string? iExcel_testObjectFilePath = ResolvePathWithinFolder(githubPath + iExcel_testObjectRelativePath, githubPath);
+            if (iExcel_testObjectFilePath == null)
+            {
+                AbortUnitTest($"Test object file path '{iExcel_testObjectRelativePath}' in the input excel workbook resolves outside the repository folder '{githubPath}'.");
+                return;
+            }
             #endregion
 
             #region STAGING TEST: create emulated controller & chassis -> convert L5X to ACD -> download to ACD -> put controller in test mode
             string l5xFilePath = iExcel_testObjectFilePath;
-            string acdFilePath = generatedFilesFolderPath + currentDateTime + "_" + Path.GetFileNameWithoutExtension(l5xFilePath) + ".ACD";
 
             // Get variables needed to set up unit test. Information retreived from the L5X file specified in the input excel sheet.
-            string testObjectName = GetAttributeValue(l5xFilePath, "RSLogix5000Content", "TargetName", false)!;
+            // TargetName is used in generated file names, so it must be a valid Logix identifier (no path separators or '..').
+            string? testObjectName = GetAttributeValue(l5xFilePath, "RSLogix5000Content", "TargetName", false);
+            if (!IsValidLogixIdentifier(testObjectName))
+            {
+                AbortUnitTest($"L5X TargetName '{testObjectName}' is not a valid Logix identifier (expected letters, digits, and underscores, not starting with a digit).");
+                return;
+            }
 
             // Print message to console about the selected input excel test information.
-            string outputTextFilePath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.txt";
-            string outputExcelFilePath = reportAndGeneratedFilesFolderPath + @"2-excelreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.xlsx";
+            string? acdFilePath = ResolvePathWithinFolder(generatedFilesFolderPath + currentDateTime + "_" + Path.GetFileNameWithoutExtension(l5xFilePath) + ".ACD", generatedFilesFolderPath);
+            string? outputTextFilePath = ResolvePathWithinFolder(reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.txt", reportAndGeneratedFilesFolderPath + @"1-textreports\");
+            string? outputExcelFilePath = ResolvePathWithinFolder(reportAndGeneratedFilesFolderPath + @"2-excelreports\" + currentDateTime + "_" + testObjectName + "_UnitTestReport.xlsx", reportAndGeneratedFilesFolderPath + @"2-excelreports\");
+            if (acdFilePath == null || outputTextFilePath == null || outputExcelFilePath == null)
+            {
+                AbortUnitTest($"Generated file paths for '{testObjectName}' resolve outside the report and generated files folder '{reportAndGeneratedFilesFolderPath}'.");
+                return;
+            }
 
             Console.WriteLine("Unit test target object type:".PadRight(40, ' ') + "Full Application (L5X)");
             Console.WriteLine("Input excel workbook file path:".PadRight(40, ' ') + WrapText(inputExcelFilePath, 40, consoleCharLengthLimit));
@@ -543,7 +565,7 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
 
             // Rename text file to include the target object name.
             string textFileReportPath = reportAndGeneratedFilesFolderPath + @"1-textreports\" + currentDateTime + "_UnitTestReport.txt";
-            RenameFile(textFileReportPath, currentDateTime + "_" + testObjectName + "_UnitTestReport.txt");
+            RenameFile(textFileReportPath, Path.GetFileName(outputTextFilePath));
             #endregion
         }
 
@@ -911,11 +933,59 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             // Get the directory of the old file
             string directory = Path.GetDirectoryName(oldFilePath)!;
 
+            // The new name must be a bare file name that stays in the same directory.
+            if (string.IsNullOrWhiteSpace(newFileName) || newFileName != Path.GetFileName(newFileName))
+                throw new ArgumentException($"New file name '{newFileName}' must not contain directory components.", nameof(newFileName));
+
             // Combine the directory, new file name, and extension to form the new file path
-            string newFilePath = Path.Combine(directory, newFileName);
+            string newFilePath = ResolvePathWithinFolder(Path.Combine(directory, newFileName), directory)
+                ?? throw new ArgumentException($"New file name '{newFileName}' resolves outside '{directory}'.", nameof(newFileName));
 
             // Rename the file
             File.Move(oldFilePath, newFilePath);
+        }
+
+        /// <summary>
+        /// Check whether a value is a valid Studio 5000 Logix Designer identifier (letters, digits, and underscores, not starting with a digit).
+        /// </summary>
+        /// <param name="name">The value to check.</param>
+        /// <returns>True if the value is a valid Logix identifier.</returns>
+        public static bool IsValidLogixIdentifier([NotNullWhen(true)] string? name)
+        {
+            return name != null && logixIdentifierRegex.IsMatch(name);
+        }
+
+        /// <summary>
+        /// Resolve a path to its absolute form and confirm it is located inside a specified folder.
+        /// </summary>
+        /// <param name="path">The path to resolve.</param>
+        /// <param name="folderPath">The folder the resolved path must stay within.</param>
+        /// <returns>The absolute path, or null if it resolves outside the folder (or is not a valid path).</returns>
+        public static string? ResolvePathWithinFolder(string path, string folderPath)
+        {
+            try
+            {
+                string fullFolderPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folderPath)) + Path.DirectorySeparatorChar;
+                string fullPath = Path.GetFullPath(path);
+                StringComparison comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+                return fullPath.StartsWith(fullFolderPath, comparison) && fullPath.Length > fullFolderPath.Length ? fullPath : null;
+            }
+            catch (Exception e) when (e is ArgumentException || e is NotSupportedException || e is PathTooLongException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Print an error, mark the unit test as failed in the text report, and stop logging.
+        /// </summary>
+        /// <param name="message">The error message to print.</param>
+        private static void AbortUnitTest(string message)
+        {
+            ConsoleMessage(message, "ERROR");
+            CreateBanner("UNIT TEST FINAL RESULT: FAIL");
+            StopLogging();
         }
         #endregion
     }
