@@ -15,8 +15,10 @@ using LogixEcho_ClassLibrary;
 using OfficeOpenXml;
 using RockwellAutomation.LogixDesigner;
 using RockwellAutomation.LogixDesigner.Logging;
+using System.Diagnostics.CodeAnalysis;
 using System.Drawing;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using static ConsoleFormatter_ClassLibrary.ConsoleFormatter;
 using static LogixDesigner_ClassLibrary.LogixDesigner;
@@ -184,7 +186,13 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             ConsoleMessage("START creating & opening ACD application file to be used during testing...", "NEWSECTION");
 
             // Get variables needed to set up unit test. Information retreived from the L5X or ACD file specified in the input excel sheet.
-            string testObjectName = GetAttributeValue(iExcel_testObjectFilePath, "AddOnInstructionDefinition", "Name", false)!;
+            string? testObjectName = GetAttributeValue(iExcel_testObjectFilePath, "AddOnInstructionDefinition", "Name", false);
+            if (!IsValidLogixName(testObjectName))
+            {
+                ConsoleMessage($"AddOnInstructionDefinition Name '{testObjectName}' in '{iExcel_testObjectFilePath}' is not a valid Logix name " +
+                    "(letters, digits, and underscores only, not starting with a digit). Unit test aborted.", "ERROR");
+                return;
+            }
             string softwareRevision = GetAttributeValue(iExcel_testObjectFilePath, "RSLogix5000Content", "SoftwareRevision", false)!;
 
             /* Create the ACD file to host unit test.
@@ -197,11 +205,11 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             string l5xFileContents = L5XFiles.GetFaultHandlingApplicationL5XContents_ForRoutine(routineName_Cont, routineName_Event, programName_Cont,
                 programName_Event, taskName_Cont, taskName_Event, routineName_FaultHandler, programName_FaultHandler,
                 controllerName, processorType, softwareRevision);                                              // Step 1: Get L5X contents.
-            string partialL5XprojectFilePath = generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_Basic.L5X";
+            string partialL5XprojectFilePath = GetPathWithinFolder(generatedFilesFolderPath, currentDateTime + "_" + testObjectName + "_Basic.L5X");
             File.WriteAllText(partialL5XprojectFilePath, l5xFileContents);                                     // Step 2: Generate new L5X file.
             LogixProject logixProjectL5X = await OpenLogixProjectAsync(partialL5XprojectFilePath);             // Step 3: Open L5X file.
             ConsoleMessage($"L5X application file created & opened at '{partialL5XprojectFilePath}'.", "STATUS");
-            string acdFilePath = generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_WithAOI.ACD";
+            string acdFilePath = GetPathWithinFolder(generatedFilesFolderPath, currentDateTime + "_" + testObjectName + "_WithAOI.ACD");
             await logixProjectL5X.SaveAsAsync(acdFilePath, true);                                              // Step 4: Convert L5X to ACD.
             LogixProject logixProject = await OpenLogixProjectAsync(acdFilePath);                              // Step 5: Open ACD file.
             ConsoleMessage($"ACD application file created & opened at '{acdFilePath}'.", "STATUS");
@@ -257,7 +265,7 @@ namespace UnitTesting_ConsoleApp.UnitTestScripts
             else
                 ConsoleMessage("FAILURE changing controller to TEST mode.", "ERROR", false);
 
-            string fullL5XprojectFilePath = generatedFilesFolderPath + currentDateTime + "_" + testObjectName + "_FullProj.L5X";
+            string fullL5XprojectFilePath = GetPathWithinFolder(generatedFilesFolderPath, currentDateTime + "_" + testObjectName + "_FullProj.L5X");
             await logixProject.SaveAsAsync(fullL5XprojectFilePath, true);
             #endregion
 
@@ -2197,14 +2205,16 @@ This a programmatically created rung with a populated instance of the AOI instru
             if (!File.Exists(sourceFilePath))
                 ConsoleMessage($"Source file '{sourceFilePath}' does not exist.", "ERROR");
 
-            string targetObjectName = GetAttributeValue(sourceFilePath, "AddOnInstructionDefinition", "Name", printOut)!;
+            string? targetObjectName = GetAttributeValue(sourceFilePath, "AddOnInstructionDefinition", "Name", printOut);
+            if (!IsValidLogixName(targetObjectName))
+                throw new InvalidDataException($"AddOnInstructionDefinition Name '{targetObjectName}' in '{sourceFilePath}' is not a valid Logix name.");
 
             // Get the directory and file name from the source file path.
             string extension = Path.GetExtension(sourceFilePath);
 
             // Construct the new file path for the copied file.
             string newFileName = $"{currentDateTime}_{targetObjectName}_AOIRoutine{extension}";
-            string newFilePath = Path.Combine(outputFolderPath, newFileName);
+            string newFilePath = GetPathWithinFolder(outputFolderPath, newFileName);
 
             File.Copy(sourceFilePath, newFilePath, overwrite: true);
 
@@ -2222,10 +2232,38 @@ This a programmatically created rung with a populated instance of the AOI instru
             string directory = Path.GetDirectoryName(oldFilePath)!;
 
             // Combine the directory, new file name, and extension to form the new file path
-            string newFilePath = Path.Combine(directory, newFileName);
+            string newFilePath = GetPathWithinFolder(directory, newFileName);
 
             // Rename the file
             File.Move(oldFilePath, newFilePath);
+        }
+
+        /// <summary>
+        /// Check whether a name is a valid Studio 5000 Logix Designer identifier (letters, digits, and underscores, not starting with a digit).
+        /// </summary>
+        /// <param name="name">The name to check.</param>
+        /// <returns>True if the name is a valid Logix identifier.</returns>
+        public static bool IsValidLogixName([NotNullWhen(true)] string? name)
+        {
+            return name != null && Regex.IsMatch(name, @"^[A-Za-z_][A-Za-z0-9_]*$");
+        }
+
+        /// <summary>
+        /// Combine a folder path and file name, and verify the resulting full path stays inside that folder.
+        /// </summary>
+        /// <param name="folderPath">The folder the file must be located in.</param>
+        /// <param name="fileName">The name of the file.</param>
+        /// <returns>The full path of the file.</returns>
+        /// <exception cref="InvalidOperationException">Thrown if the resulting path resolves outside the folder.</exception>
+        public static string GetPathWithinFolder(string folderPath, string fileName)
+        {
+            string fullFolderPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folderPath)) + Path.DirectorySeparatorChar;
+            string fullFilePath = Path.GetFullPath(Path.Combine(fullFolderPath, fileName));
+
+            if (!fullFilePath.StartsWith(fullFolderPath, StringComparison.OrdinalIgnoreCase) || fullFilePath.Length == fullFolderPath.Length)
+                throw new InvalidOperationException($"Generated file path '{fullFilePath}' resolves outside of folder '{fullFolderPath}'.");
+
+            return fullFilePath;
         }
         #endregion
     }
