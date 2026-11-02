@@ -26,6 +26,11 @@ pipeline {
         GITHUB_USER_NAME = powershell(script: "git log -1 --pretty=format:'%an'", returnStdout: true).trim()
         GITHUB_COMMIT_HASH = powershell(script: "git log -1 --pretty=format:'%H'", returnStdout: true).trim()
         GITHUB_COMMIT_MSG = powershell(script: "git log -1 --pretty=format:'%s'", returnStdout: true).trim()
+        // Stops cmd.exe from resolving bare command names against the current directory (the checkout of the tested branch).
+        NoDefaultCurrentDirectoryInExePath = '1'
+        // Absolute paths to the tools used by the Release stage. Update these to match the install locations on the Jenkins agent.
+        GIT_EXE = 'C:\\Program Files\\Git\\cmd\\git.exe'
+        GH_EXE = 'C:\\Program Files\\GitHub CLI\\gh.exe'
     }
 
     stages {
@@ -44,12 +49,20 @@ pipeline {
                     def excelFileNames = powershell(
                         script: "Get-ChildItem -Path ${inputExcelWorkbooksFolderPath} -Filter *.xlsx | Select-Object -ExpandProperty Name",
                         returnStdout: true
-                    ).trim().split('\n')
+                    ).trim().split('\n').collect { it.trim() }.findAll { it }
+                    def commitMetadataEnv = ciCommitMetadataEnv()
 
                     // Loop through each excel workbook file name and execute the test script for each workbook. 
                     excelFileNames.each { fileName ->
-                        bat(script: "@${executable_filePath} ${env.PATH_JENKINS_GITHUB} ${fileName.trim()} \"${env.GITHUB_USER_NAME}\" ${env.GITHUB_USER_EMAIL} " +
-                            "\"${env.GITHUB_COMMIT_MSG}\" ${env.GITHUB_COMMIT_HASH} ${env.JOB_NAME} ${env.BUILD_NUMBER} ${env.PATH_GEN_FILES_AND_REPORTS}")
+                        if (!(fileName ==~ /[A-Za-z0-9_.-]+\.xlsx/)) {
+                            error("Rejected workbook file name in 3-ci-inputexcelworkbooks: only letters, digits, '_', '.' and '-' are allowed.")
+                        }
+
+                        // Branch-controlled values reach cmd.exe only as quoted %VAR% references, never as script text.
+                        withEnv(commitMetadataEnv + ["CI_WORKBOOK=${fileName}"]) {
+                            bat(script: "@${executable_filePath} ${env.PATH_JENKINS_GITHUB} \"%CI_WORKBOOK%\" \"%CI_AUTHOR_NAME%\" \"%CI_AUTHOR_EMAIL%\" " +
+                                "\"%CI_COMMIT_MSG%\" %CI_COMMIT_HASH% ${env.JOB_NAME} ${env.BUILD_NUMBER} ${env.PATH_GEN_FILES_AND_REPORTS}")
+                        }
 
                         // Get the phrase "PASS" or "FAIL" from the final banner displayed in the text report.
                         testFinalResult = trimFinalTextReportBanner("${env.PATH_GEN_FILES_AND_REPORTS}1-textreports")
@@ -72,46 +85,48 @@ pipeline {
 
                     if (FINAL_TEST_RESULT == 'PASS') {
                         // Create the contents of the pr body message based on the results of testing.
-                        def pr_messagecontents = "${env.GITHUB_USER_NAME} contributions from commit hash ${env.GIT_COMMIT} PASSED testing. Merge release/pending-" +
-                            "pr-${env.BUILD_NUMBER} into ${env.GITHUB_RELEASE_BRANCH}. The release/pending-pr-${env.BUILD_NUMBER} branch can be safely deleted" + 
-                            " once merged."
+                        def pr_messagecontents = "${cmdSafeText(env.GITHUB_USER_NAME)} contributions from commit hash ${env.GIT_COMMIT} PASSED testing. Merge " +
+                            "release/pending-pr-${env.BUILD_NUMBER} into ${env.GITHUB_RELEASE_BRANCH}. The release/pending-pr-${env.BUILD_NUMBER} branch can be " +
+                            "safely deleted once merged."
 
-                        bat """
-                            setlocal
+                        // git and gh are called by absolute path, and branch-controlled values reach cmd.exe only as quoted %VAR% references.
+                        withEnv(ciCommitMetadataEnv() + ["CI_PR_BODY=${pr_messagecontents}"]) {
+                            bat """
+                                setlocal
 
-                            :: Set the local user info for the Jenkins job agent to the commiter's info.
-                            cd ${env.PATH_JENKINS_GITHUB}
-                            git config --global --replace-all user.email ${env.GITHUB_USER_EMAIL}
-                            git config --global --replace-all user.name ${env.GITHUB_USER_NAME}
+                                :: Set the local user info for the Jenkins job agent to the commiter's info.
+                                cd ${env.PATH_JENKINS_GITHUB}
+                                "%GIT_EXE%" config --global --replace-all user.email "%CI_AUTHOR_EMAIL%"
+                                "%GIT_EXE%" config --global --replace-all user.name "%CI_AUTHOR_NAME%"
 
-                            :: Fetch all branches 
-                            git fetch --all 
+                                :: Fetch all branches 
+                                "%GIT_EXE%" fetch --all 
 
-                            :: Check if the release/pending-pr-${env.BUILD_NUMBER} branch exists
-                            git show-ref --verify --quiet refs/heads/release/pending-pr-${env.BUILD_NUMBER}
-                            if %errorlevel% neq 0 ( 
-                                echo Branch 'release/pending-pr-${env.BUILD_NUMBER}' does not exist. Creating it. 
-                                git checkout -b release/pending-pr-${env.BUILD_NUMBER}
-                            ) else ( 
-                                echo Branch 'release/pending-pr-${env.BUILD_NUMBER}' exists. Checking it out. 
-                                git checkout release/pending-pr-${env.BUILD_NUMBER} 
-                                git merge origin/${env.GITHUB_DEV_BRANCH}
-                            ) 
-                            
-                            :: Push changes to the remote repository 
-                            git push origin release/pending-pr-${env.BUILD_NUMBER}
+                                :: Check if the release/pending-pr-${env.BUILD_NUMBER} branch exists
+                                "%GIT_EXE%" show-ref --verify --quiet refs/heads/release/pending-pr-${env.BUILD_NUMBER}
+                                if %errorlevel% neq 0 ( 
+                                    echo Branch 'release/pending-pr-${env.BUILD_NUMBER}' does not exist. Creating it. 
+                                    "%GIT_EXE%" checkout -b release/pending-pr-${env.BUILD_NUMBER}
+                                ) else ( 
+                                    echo Branch 'release/pending-pr-${env.BUILD_NUMBER}' exists. Checking it out. 
+                                    "%GIT_EXE%" checkout release/pending-pr-${env.BUILD_NUMBER} 
+                                    "%GIT_EXE%" merge origin/${env.GITHUB_DEV_BRANCH}
+                                ) 
+                                
+                                :: Push changes to the remote repository 
+                                "%GIT_EXE%" push origin release/pending-pr-${env.BUILD_NUMBER}
 
-                            git add .
-                            git commit -m \"${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: ${env.BUILD_NUMBER}\"
-                            git push --set-upstream origin release/pending-pr-${env.BUILD_NUMBER}
+                                "%GIT_EXE%" add .
+                                "%GIT_EXE%" commit -m \"${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: ${env.BUILD_NUMBER}\"
+                                "%GIT_EXE%" push --set-upstream origin release/pending-pr-${env.BUILD_NUMBER}
 
-                            endlocal
-                            """
+                                endlocal
+                                """
 
-                            def prCommand = 'gh pr create --title "' + "${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: " + 
-                                            "${env.BUILD_NUMBER}\" " + '--body "' + "${pr_messagecontents}\" " + '--base ' + "${env.GITHUB_RELEASE_BRANCH} " + 
-                                            '--head ' + "release/pending-pr-${env.BUILD_NUMBER}" 
-                            bat prCommand
+                            bat '"%GH_EXE%" pr create --title "' + "${FINAL_TEST_RESULT}ED CI TESTING | Jenkins job: ${env.JOB_NAME} | Jenkins build #: " +
+                                "${env.BUILD_NUMBER}\" " + '--body "%CI_PR_BODY%" --base ' + "${env.GITHUB_RELEASE_BRANCH} " +
+                                '--head ' + "release/pending-pr-${env.BUILD_NUMBER}"
+                        }
                     }
                     if (FINAL_TEST_RESULT == 'FAIL') {
                         echo "CI Testing FAILURE: ${env.GITHUB_USER_NAME} contributions from commit hash ${env.GIT_COMMIT} did not pass CI testing. Check the " +
@@ -161,4 +176,28 @@ def trimFinalTextReportBanner(folderPath) {
         echo "No text files found in the folder: ${folderPath}"
         return "ERROR: no file found."
     }
+}
+
+// Commit metadata comes from the tested branch. It is validated or stripped of characters that could end cmd.exe quoting, start a variable
+// expansion, or escape a closing quote, and is then passed to bat steps as environment variables.
+def ciCommitMetadataEnv() {
+    def email = (env.GITHUB_USER_EMAIL ?: '').trim()
+    def hash = (env.GITHUB_COMMIT_HASH ?: '').trim()
+    if (!(email ==~ /[A-Za-z0-9._+-]+@[A-Za-z0-9.-]+/)) {
+        error('Rejected commit author email: it must be a plain address made of letters, digits and . _ + - characters.')
+    }
+    if (!(hash ==~ /[0-9a-f]{40}/)) {
+        error('Rejected commit hash: it must be a 40 character hexadecimal SHA-1.')
+    }
+    return [
+        "CI_AUTHOR_NAME=${cmdSafeText(env.GITHUB_USER_NAME)}",
+        "CI_AUTHOR_EMAIL=${email}",
+        "CI_COMMIT_MSG=${cmdSafeText(env.GITHUB_COMMIT_MSG)}",
+        "CI_COMMIT_HASH=${hash}"
+    ]
+}
+
+// Replaces control characters and the characters cmd.exe or Windows argument parsing treat specially (" % ! ^ & | < > \ `) with '_'.
+def cmdSafeText(value) {
+    return (value ?: '').toString().trim().replaceAll(/[\p{Cntrl}"%!^&|<>\\`]/, '_')
 }
