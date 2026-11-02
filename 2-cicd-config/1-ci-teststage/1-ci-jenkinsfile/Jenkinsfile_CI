@@ -50,6 +50,9 @@ pipeline {
                         script: "Get-ChildItem -Path ${inputExcelWorkbooksFolderPath} -Filter *.xlsx | Select-Object -ExpandProperty Name",
                         returnStdout: true
                     ).trim().split('\n').collect { it.trim() }.findAll { it }
+                    if (excelFileNames.isEmpty()) {
+                        error("No .xlsx workbooks found in ${inputExcelWorkbooksFolderPath}; refusing to release untested contents.")
+                    }
                     def commitMetadataEnv = ciCommitMetadataEnv()
 
                     // Loop through each excel workbook file name and execute the test script for each workbook. 
